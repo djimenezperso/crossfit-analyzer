@@ -2,8 +2,7 @@ import streamlit as st
 import cv2
 import numpy as np
 import tempfile
-from pytubefix import YouTube
-import os
+import yt_dlp
 from ultralytics import YOLO
 from collections import deque
 
@@ -47,7 +46,7 @@ else:
                     st.success("Vídeo descargado correctamente. ¡Listo para analizar!")
             except Exception as e:
                 st.error(f"Error al descargar el vídeo: {e}")
-                
+
 @st.cache_resource
 def cargar_modelo():
     return YOLO('yolov8n-pose.pt')

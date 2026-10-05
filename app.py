@@ -1,201 +1,241 @@
-import streamlit as st
+import os
+import shutil
+import subprocess
+import tempfile
+
 import cv2
 import numpy as np
-import tempfile
+import pandas as pd
+import streamlit as st
 from ultralytics import YOLO
-from collections import deque
 
-# Configuración de la página web
-st.set_page_config(page_title="CrossFit Rep Counter", page_icon="🏋️‍♂️", layout="centered")
+import snatch_utils as su
 
-st.title("🏋️‍♂️ Contador de Repeticiones CrossFit")
-st.write("Sube tu vídeo para analizar tus repeticiones de forma automática.")
+REF_PATH = "referencia_snatch.mp4"  # súbelo al repo con este nombre
 
-# Selección de modalidad
-modalidad = st.selectbox("Selecciona el ejercicio:", ["Pull-ups (Dominadas)", "Squat Snatch"])
+st.set_page_config(page_title="Comparador de Snatch", page_icon="🏋️", layout="wide")
+st.title("🏋️ Comparador de Squat Snatch")
+st.write("Compara la técnica de un alumno con un vídeo modelo: ángulos articulares, fases y vídeo sincronizado.")
 
-# Subir archivo directamente
-video_file = st.file_uploader("Sube tu archivo de vídeo (.mp4, .mov, .avi)", type=["mp4", "mov", "avi"])
-video_path = None
+with st.sidebar:
+    st.header("Ajustes")
+    modelo_nombre = st.selectbox("Modelo de pose", ["yolov8m-pose.pt", "yolov8l-pose.pt", "yolov8s-pose.pt"])
+    imgsz = st.select_slider("Resolución de análisis", [320, 480, 640, 960], value=640)
+    umbral = st.slider("Umbral de diferencia (grados)", 5, 30, 15)
+    st.caption("Más resolución y modelo más grande = más preciso pero más lento.")
 
-if video_file is not None:
-    tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-    tfile.write(video_file.read())
-    video_path = tfile.name
+st.info("📹 **Cómo grabar:** vista **lateral** (90° respecto al plano del movimiento), cámara fija a la altura de la "
+        "cadera, a 3-4 m, cuerpo entero visible y el mismo lado que el vídeo modelo.")
 
+
+# ------------------------------------------------------------------ helpers
 @st.cache_resource
-def cargar_modelo():
-    return YOLO('yolov8n-pose.pt')
+def cargar_modelo(nombre):
+    return YOLO(nombre)
 
-if video_path and st.button("🚀 Analizar Vídeo"):
-    with st.spinner("Procesando vídeo con IA... Esto puede tardar unos segundos."):
-        
-        model = cargar_modelo()
-        cap = cv2.VideoCapture(video_path)
-        
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        output_path_clean = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
-        output_path_skeleton = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
-        
-        out_clean = cv2.VideoWriter(output_path_clean, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
-        out_skeleton = cv2.VideoWriter(output_path_skeleton, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
+def guardar_subida(f):
+    clave = f"subida_{f.name}_{f.size}"
+    if clave not in st.session_state:
+        t = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+        t.write(f.getvalue())
+        t.close()
+        st.session_state[clave] = t.name
+    return st.session_state[clave]
 
-        repeticiones = 0
-        contador_frames = 0
-        
-        # Variables de estado
-        fase = "ABAJO"
-        
-        # Variables específicas para Pull-ups
-        h_min = 0.0
-        historial_h = deque(maxlen=3)
-        ventana_h = deque(maxlen=int(4.0 * max(fps, 1))) 
-        ultimo_frame_rep = -1000
 
-        # Variables específicas para Squat Snatch
-        ultimo_frame_snatch = -1000
+def extraer_keypoints(path, modelo, imgsz, barra):
+    cap = cv2.VideoCapture(path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25
+    total = max(int(cap.get(cv2.CAP_PROP_FRAME_COUNT)), 1)
+    w, h = int(cap.get(3)), int(cap.get(4))
+    kps = []
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        k = np.full((17, 3), np.nan, dtype=np.float32)
+        r = modelo(frame, verbose=False, imgsz=imgsz)[0]
+        if r.keypoints is not None and len(r.boxes) > 0:
+            cajas = r.boxes.xyxy.cpu().numpy()
+            areas = (cajas[:, 2] - cajas[:, 0]) * (cajas[:, 3] - cajas[:, 1])
+            idx = int(np.argmax(areas))  # persona más grande = atleta principal
+            k[:, :2] = r.keypoints.xy[idx].cpu().numpy()
+            k[:, 2] = r.keypoints.conf[idx].cpu().numpy() if r.keypoints.conf is not None else 1.0
+        kps.append(k)
+        barra.progress(min(len(kps) / total, 1.0))
+    cap.release()
+    return dict(kps=np.array(kps), fps=fps, size=(w, h))
 
-        progress_bar = st.progress(0)
 
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            contador_frames += 1
-            progress_bar.progress(min(contador_frames / total_frames, 1.0))
+def leer_frame(path, idx):
+    cap = cv2.VideoCapture(path)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+    ok, f = cap.read()
+    cap.release()
+    return cv2.cvtColor(f, cv2.COLOR_BGR2RGB) if ok else None
 
-            resultados = model(frame, verbose=False, imgsz=320)
-            
-            fotograma_limpio = frame.copy()
-            fotograma_esqueleto = frame.copy()
 
-            if resultados[0].keypoints is not None and len(resultados[0].keypoints.xy) > 0:
-                cajas = resultados[0].boxes.xyxy.tolist()
-                areas = [(c[2] - c[0]) * (c[3] - c[1]) for c in cajas]
-                persona_idx = int(np.argmax(areas))
-                
-                res_aislado = resultados[0][persona_idx]
-                
-                # Pintamos el esqueleto explícitamente
-                fotograma_esqueleto = res_aislado.plot(img=frame.copy(), boxes=False, labels=False)
-                
-                puntos = res_aislado.keypoints.xy[0]
-                conf = res_aislado.keypoints.conf
-                conf = conf[0] if conf is not None else None
+def a_h264(path):
+    """Reencodea a H.264 (si hay ffmpeg) para que el navegador lo reproduzca."""
+    if shutil.which("ffmpeg") is None:
+        return path
+    out = path.replace(".mp4", "_h264.mp4")
+    r = subprocess.run(["ffmpeg", "-y", "-i", path, "-vcodec", "libx264", "-pix_fmt", "yuv420p",
+                        "-loglevel", "error", out])
+    return out if r.returncode == 0 and os.path.exists(out) else path
 
-                if conf is not None and len(puntos) > 14:
 
-                    # LÓGICA: PULL-UPS
-                    if modalidad == "Pull-ups (Dominadas)":
-                        ok = lambda idx: float(conf[idx]) > 0.4
-                        P = lambda idx: np.array([float(puntos[idx][0]), float(puntos[idx][1])])
+# -------------------------------------------------------------------- entrada
+col1, col2 = st.columns(2)
+with col1:
+    st.subheader("Vídeo modelo")
+    if os.path.exists(REF_PATH):
+        path_ref = REF_PATH
+        st.success(f"Usando `{REF_PATH}` del repositorio")
+    else:
+        f = st.file_uploader("Sube el vídeo modelo", type=["mp4", "mov", "avi"], key="ref")
+        path_ref = guardar_subida(f) if f else None
+with col2:
+    st.subheader("Vídeo del alumno")
+    f = st.file_uploader("Sube el vídeo del alumno", type=["mp4", "mov", "avi"], key="al")
+    path_al = guardar_subida(f) if f else None
 
-                        if ok(5) and ok(6) and ok(11) and ok(12):
-                            hombro_mid = (P(5) + P(6)) / 2
-                            cadera_mid = (P(11) + P(12)) / 2
-                            eje = hombro_mid - cadera_mid
-                            torso = float(np.linalg.norm(eje))
-                            
-                            if torso > 20:
-                                u = eje / torso
-                                s = lambda p: float(np.dot(p, u))
-                                s_hombro = s(hombro_mid)
-                                
-                                munecas = [P(i) for i in (9, 10) if ok(i) and s(P(i)) > s_hombro - 0.2 * torso]
-                                if len(munecas) > 0:
-                                    s_barra = sum(s(m) for m in munecas) / len(munecas)
-                                    orejas = [(float(conf[i]), P(i)) for i in (3, 4) if float(conf[i]) > 0.2]
-                                    
-                                    if len(orejas) > 0:
-                                        punto_cabeza = max(orejas, key=lambda x: x[0])[1]
-                                        barbilla = punto_cabeza - u * (0.20 * torso)
-                                    else:
-                                        barbilla = hombro_mid + u * (0.25 * torso)
+if not (path_ref and path_al):
+    st.stop()
 
-                                    h_bruto = (s_barra - s(barbilla)) / torso - 0.15
-                                    historial_h.append(h_bruto)
-                                    h = sum(historial_h) / len(historial_h)
-                                    ventana_h.append(h)
+if st.button("🚀 Analizar vídeos (extraer poses)", type="primary"):
+    modelo = cargar_modelo(modelo_nombre)
+    for rol, path, nombre in (("ref", path_ref, "modelo"), ("al", path_al, "alumno")):
+        st.write(f"Analizando vídeo del {nombre}...")
+        barra = st.progress(0)
+        d = extraer_keypoints(path, modelo, imgsz, barra)
+        d["path"] = path
+        st.session_state[f"datos_{rol}"] = d
 
-                                    hang_ref = float(np.percentile(ventana_h, 80)) if len(ventana_h) >= 15 else 1.0
-                                    recorrido = hang_ref - h
+R, A = st.session_state.get("datos_ref"), st.session_state.get("datos_al")
+if not (R and A and R["path"] == path_ref and A["path"] == path_al):
+    st.warning("Pulsa **Analizar vídeos** para extraer las poses.")
+    st.stop()
 
-                                    if fase == "ABAJO":
-                                        if recorrido >= 0.15:
-                                            fase = "SUBIENDO"
-                                            h_min = h
-                                    elif fase == "SUBIENDO":
-                                        h_min = min(h_min, h)
-                                        if (h - h_min) > 0.08:  
-                                            drop_pico = hang_ref - h_min
-                                            if drop_pico >= 0.30 and (contador_frames - ultimo_frame_rep) >= int(0.6 * fps):
-                                                repeticiones += 1
-                                                ultimo_frame_rep = contador_frames
-                                            fase = "BAJANDO"
-                                    elif fase == "BAJANDO":
-                                        if h >= h_min + 0.5 * (hang_ref - h_min):
-                                            fase = "ABAJO"
+# ---------------------------------------------------------- métricas y avisos
+lado_r, lado_a = su.lado_visible(R["kps"]), su.lado_visible(A["kps"])
+df_r, df_a = su.calcular_metricas(R["kps"], lado_r), su.calcular_metricas(A["kps"], lado_a)
 
-                    # LÓGICA: SQUAT SNATCH (Revisada y flexible)
-                    elif modalidad == "Squat Snatch":
-                        ok = lambda idx: float(conf[idx]) > 0.3
-                        P_y = lambda idx: float(puntos[idx][1]) 
+for nombre, d, lado in (("modelo", R, lado_r), ("alumno", A, lado_a)):
+    rat, cob = su.ratio_lateral(d["kps"], lado), su.cobertura(d["kps"], lado)
+    if rat is not None and rat > 0.45:
+        st.warning(f"⚠️ El vídeo del **{nombre}** no parece lateral (ratio hombros/torso = {rat:.2f}). "
+                   "Los ángulos 2D estarán distorsionados y la comparación será solo orientativa.")
+    if cob < 0.7:
+        st.warning(f"⚠️ En el vídeo del **{nombre}** solo se detecta bien el cuerpo en el {cob:.0%} de los frames "
+                   "(¿oclusión por la barra o el cuerpo cortado?).")
+st.caption(f"Lado analizado → modelo: {lado_r} · alumno: {lado_a}")
 
-                        def get_media_y(idx1, idx2):
-                            if ok(idx1) and ok(idx2): return (P_y(idx1) + P_y(idx2)) / 2
-                            elif ok(idx1): return P_y(idx1)
-                            elif ok(idx2): return P_y(idx2)
-                            return None
+# ------------------------------------------------------------------- recorte
+st.subheader("1️⃣ Recorta el intento")
+st.write("Deja solo desde la salida hasta que el atleta termina de pie con la barra arriba "
+         "(quita celebraciones, tiros de la barra, etc.).")
+c1, c2 = st.columns(2)
+segs, fps_ = {}, {}
+for col, rol, d, nombre in ((c1, "ref", R, "Modelo"), (c2, "al", A, "Alumno")):
+    with col:
+        n, fps = len(d["kps"]), d["fps"]
+        dur = n / fps
+        t0, t1 = st.slider(f"{nombre} (s)", 0.0, float(round(dur, 1)), (0.0, float(round(dur, 1))), 0.1, key=f"s_{rol}")
+        i0, i1 = int(t0 * fps), min(n - 1, int(t1 * fps))
+        segs[rol] = (i0, i1)
+        a, b = st.columns(2)
+        a.image(leer_frame(d["path"], i0), caption="inicio", use_container_width=True)
+        b.image(leer_frame(d["path"], i1), caption="fin", use_container_width=True)
 
-                        y_muneca = get_media_y(9, 10)
-                        y_hombro = get_media_y(5, 6)
-                        y_cadera = get_media_y(11, 12)
-                        y_rodilla = get_media_y(13, 14)
+(r0, r1), (a0, a1) = segs["ref"], segs["al"]
+if r1 - r0 < 15 or a1 - a0 < 15:
+    st.error("El segmento es demasiado corto.")
+    st.stop()
+if (r1 - r0) > 1200 or (a1 - a0) > 1200:
+    st.error("Segmento demasiado largo para alinear (máx. ~1200 frames). Recórtalo más.")
+    st.stop()
 
-                        if None not in (y_muneca, y_hombro, y_cadera, y_rodilla):
-                            # Barra arriba: muñecas claramente por encima de los hombros (en coordenadas de pantalla Y es menor arriba)
-                            barra_arriba = y_muneca < (y_hombro + 20)
-                            
-                            # Sentadilla: la cadera baja respecto a las rodillas
-                            en_squat = y_cadera >= (y_rodilla - 25)
-                            
-                            # De pie: la cadera sube por encima de las rodillas
-                            de_pie = y_cadera < (y_rodilla - 40)
+sr, sa = df_r.iloc[r0:r1 + 1].reset_index(drop=True), df_a.iloc[a0:a1 + 1].reset_index(drop=True)
 
-                            if fase == "ABAJO":
-                                if barra_arriba and en_squat:
-                                    fase = "SQUAT"
-                            elif fase == "SQUAT":
-                                if barra_arriba and de_pie and (contador_frames - ultimo_frame_snatch) >= int(0.8 * fps):
-                                    repeticiones += 1
-                                    ultimo_frame_snatch = contador_frames
-                                    fase = "ABAJO"
-                                elif not barra_arriba and y_cadera > y_rodilla + 50:
-                                    fase = "ABAJO"
+# ---------------------------------------------------------------- alineación
+with st.spinner("Alineando movimientos (DTW)..."):
+    path = su.alinear_dtw(sr, sa)
+    mapa = su.mapa_alumno_a_ref(path, len(sa))
+cr, ca = su.detectar_recepcion(sr), su.detectar_recepcion(sa)
 
-            # Pintar contadores
-            for img in (fotograma_limpio, fotograma_esqueleto):
-                cv2.rectangle(img, (10, 10), (180, 60), (0, 0, 0), -1)
-                cv2.putText(img, f"Reps: {repeticiones}", (20, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
-            
-            out_clean.write(fotograma_limpio)
-            out_skeleton.write(fotograma_esqueleto)
+st.subheader("2️⃣ Resultados")
+m1, m2, m3 = st.columns(3)
+m1.metric("Recepción del modelo", f"{cr / len(sr):.0%} del movimiento")
+m2.metric("Recepción del alumno", f"{ca / len(sa):.0%} del movimiento")
+m3.metric("Diferencia de timing", f"{(ca / len(sa) - cr / len(sr)) * 100:+.0f} pp")
+st.caption("El tiempo se compara en proporción (no en segundos) porque el modelo puede estar en cámara lenta.")
 
-        cap.release()
-        out_clean.release()
-        out_skeleton.release()
+# ---- curvas alineadas
+dfp = pd.DataFrame(path, columns=["i", "j"]).groupby("i")["j"].mean()
+x = np.arange(len(sr))
+curvas = st.columns(2)
+for n, ang in enumerate(su.ANGULOS):
+    al = np.interp(dfp.reindex(x).interpolate().bfill().ffill().values, np.arange(len(sa)), sa[ang].values)
+    with curvas[n % 2]:
+        st.markdown(f"**{ang}** (°)")
+        st.line_chart(pd.DataFrame({"Modelo": sr[ang].values, "Alumno": al}, index=x / (len(sr) - 1) * 100),
+                      height=200)
 
-        st.success("¡Análisis completado con éxito!")
-        st.metric(label="Total de Repeticiones Válidas", value=repeticiones)
+# ---- tabla de momentos clave
+momentos = {"Posición inicial": (0, 0), "Recepción": (cr, ca), "Final": (len(sr) - 1, len(sa) - 1)}
+filas, pistas = [], []
+for mom, (i, j) in momentos.items():
+    for ang in su.ANGULOS:
+        vr, va = su.valor_en(sr, ang, i), su.valor_en(sa, ang, j)
+        d = va - vr
+        flag = abs(d) > umbral
+        filas.append({"Momento": mom, "Ángulo": ang, "Modelo (°)": round(vr), "Alumno (°)": round(va),
+                      "Dif. (°)": round(d), "": "⚠️" if flag else "✅"})
+        if flag:
+            pistas.append(f"**{mom} · {ang} ({d:+.0f}°):** {su.pista(ang, mom, d)}")
+st.markdown("#### Momentos clave")
+st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
 
-        st.subheader("Vídeo Analizado:")
-        st.video(output_path_clean)
+# ---- por fases (según el camino DTW)
+st.markdown("#### Diferencia media por fase")
+fases = {"Subida y recepción": [(i, j) for i, j in path if i <= cr],
+         "Levantada": [(i, j) for i, j in path if i > cr]}
+filas_f = []
+for fase, pares in fases.items():
+    if not pares:
+        continue
+    ii, jj = np.array([p[0] for p in pares]), np.array([p[1] for p in pares])
+    fila = {"Fase": fase}
+    for ang in su.ANGULOS:
+        d = sa[ang].values[jj] - sr[ang].values[ii]
+        fila[f"{ang} (media ±)"] = f"{d.mean():+.0f}° (|{np.abs(d).mean():.0f}|)"
+    filas_f.append(fila)
+st.dataframe(pd.DataFrame(filas_f), use_container_width=True, hide_index=True)
+st.caption("Signo: alumno − modelo. Entre paréntesis, el error absoluto medio.")
 
-        with st.expander("👁️ ¿Quieres ver cómo la IA analiza tus movimientos?"):
-            st.write("Aquí puedes ver el esqueleto digital de tu levantamiento.")
-            st.video(output_path_skeleton)
+st.markdown("#### 🧠 Pistas para el entrenador")
+if pistas:
+    for p in pistas:
+        st.markdown(f"- {p}")
+else:
+    st.success(f"Ninguna diferencia supera {umbral}°.")
+st.caption("Son diferencias respecto al modelo, no errores confirmados: las proporciones y la movilidad "
+           "de cada atleta cambian, y el análisis 2D depende del ángulo de cámara.")
+
+# --------------------------------------------------------------------- vídeo
+st.subheader("3️⃣ Vídeo comparativo")
+clave_seg = (r0, r1, a0, a1, umbral)
+if st.button("🎬 Generar vídeo lado a lado"):
+    with st.spinner("Renderizando..."):
+        out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+        barra = st.progress(0)
+        su.render_comparacion(R["path"], R["kps"], df_r, lado_r, (r0, r1),
+                              A["path"], A["kps"], df_a, lado_a, (a0, a1),
+                              mapa, umbral, out, progreso=barra.progress)
+        st.session_state["video_cmp"] = (clave_seg, a_h264(out))
+v = st.session_state.get("video_cmp")
+if v and v[0] == clave_seg:
+    st.video(v[1])
+    st.caption("En rojo: segmentos del cuerpo cuyo ángulo se desvía más del umbral en ese momento.")

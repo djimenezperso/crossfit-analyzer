@@ -32,9 +32,8 @@ else:
         with st.spinner("Descargando y convirtiendo vídeo de YouTube..."):
             try:
                 ydl_opts = {
-                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', 
+                    'format': 'best', 
                     'outtmpl': tempfile.mktemp(suffix='.mp4'),
-                    'merge_output_format': 'mp4',
                     'quiet': True,
                     'noplaylist': True
                 }

@@ -2,7 +2,6 @@ import streamlit as st
 import cv2
 import numpy as np
 import tempfile
-import yt_dlp
 from ultralytics import YOLO
 from collections import deque
 
@@ -10,39 +9,19 @@ from collections import deque
 st.set_page_config(page_title="CrossFit Rep Counter", page_icon="🏋️‍♂️", layout="centered")
 
 st.title("🏋️‍♂️ Contador de Repeticiones CrossFit")
-st.write("Sube tu vídeo o pega un enlace de YouTube para analizar tus repeticiones.")
+st.write("Sube tu vídeo para analizar tus repeticiones de forma automática.")
 
 # Selección de modalidad
 modalidad = st.selectbox("Selecciona el ejercicio:", ["Pull-ups (Dominadas)", "Squat Snatch"])
 
-# Selección de fuente de vídeo
-fuente_video = st.radio("¿Cómo quieres analizar el vídeo?", ("Subir archivo", "Enlace de YouTube"))
-
+# Subir archivo directamente
+video_file = st.file_uploader("Sube tu archivo de vídeo (.mp4, .mov, .avi)", type=["mp4", "mov", "avi"])
 video_path = None
 
-if fuente_video == "Subir archivo":
-    video_file = st.file_uploader("Sube tu archivo de vídeo (.mp4, .mov)", type=["mp4", "mov", "avi"])
-    if video_file is not None:
-        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        tfile.write(video_file.read())
-        video_path = tfile.name
-else:
-    youtube_url = st.text_input("Pega el enlace de YouTube aquí:")
-    if youtube_url:
-        with st.spinner("Descargando y convirtiendo vídeo de YouTube..."):
-            try:
-                ydl_opts = {
-                    'format': 'best', 
-                    'outtmpl': tempfile.mktemp(suffix='.mp4'),
-                    'quiet': True,
-                    'noplaylist': True
-                }
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(youtube_url, download=True)
-                    video_path = ydl.prepare_filename(info)
-                st.success("Vídeo descargado correctamente. ¡Listo para analizar!")
-            except Exception as e:
-                st.error(f"Error al descargar el vídeo: {e}")
+if video_file is not None:
+    tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+    tfile.write(video_file.read())
+    video_path = tfile.name
 
 @st.cache_resource
 def cargar_modelo():
@@ -101,7 +80,7 @@ if video_path and st.button("🚀 Analizar Vídeo"):
                 
                 res_aislado = resultados[0][persona_idx]
                 
-                # Pintamos el esqueleto (puntos y palos) SOLO en el fotograma del esqueleto
+                # Pintamos el esqueleto SOLO en el fotograma del esqueleto
                 fotograma_esqueleto = res_aislado.plot(img=frame.copy(), boxes=False, labels=False)
                 
                 puntos = res_aislado.keypoints.xy[0]
@@ -215,5 +194,5 @@ if video_path and st.button("🚀 Analizar Vídeo"):
 
         # 2. Desplegable opcional para ver el análisis de postura (esqueleto)
         with st.expander("👁️ ¿Quieres ver cómo la IA analiza tus movimientos?"):
-            st.write("Aquí puedes ver el esqueleto digital de tu levantamiento. En el futuro, añadiremos aquí el análisis técnico de tu postura.")
+            st.write("Aquí puedes ver el esqueleto digital de tu levantamiento.")
             st.video(output_path_skeleton)

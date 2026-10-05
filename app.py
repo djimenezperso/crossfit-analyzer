@@ -2,7 +2,8 @@ import streamlit as st
 import cv2
 import numpy as np
 import tempfile
-import yt_dlp
+from pytubefix import YouTube
+import os
 from ultralytics import YOLO
 from collections import deque
 
@@ -31,20 +32,22 @@ else:
     if youtube_url:
         with st.spinner("Descargando vídeo de YouTube..."):
             try:
-                # Opciones para descargar el video (priorizando solo video, ya que la IA no necesita audio)
-                ydl_opts = {
-                    'format': 'bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best', 
-                    'outtmpl': tempfile.mktemp(suffix='.mp4'), 
-                    'quiet': True,
-                    'noplaylist': True
-                }
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(youtube_url, download=True)
-                    video_path = ydl.prepare_filename(info)
-                st.success("Vídeo descargado correctamente. ¡Listo para analizar!")
+                yt = YouTube(youtube_url)
+                # Busca el mejor stream que contenga video y audio, en formato mp4.
+                stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+
+                if stream is None:
+                    st.error("No se encontró un formato mp4 compatible para este vídeo.")
+                else:
+                    # Descarga en un archivo temporal
+                    temp_dir = tempfile.gettempdir()
+                    # pytubefix maneja internamente la descarga de forma nativa
+                    downloaded_path = stream.download(output_path=temp_dir)
+                    video_path = downloaded_path
+                    st.success("Vídeo descargado correctamente. ¡Listo para analizar!")
             except Exception as e:
                 st.error(f"Error al descargar el vídeo: {e}")
-
+                
 @st.cache_resource
 def cargar_modelo():
     return YOLO('yolov8n-pose.pt')

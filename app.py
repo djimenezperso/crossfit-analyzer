@@ -60,8 +60,12 @@ if video_path and st.button("🚀 Analizar Vídeo"):
         fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        output_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
-        out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
+        # CREAMOS DOS ARCHIVOS DE SALIDA: UNO LIMPIO Y OTRO CON EL ESQUELETO
+        output_path_clean = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
+        output_path_skeleton = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
+        
+        out_clean = cv2.VideoWriter(output_path_clean, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
+        out_skeleton = cv2.VideoWriter(output_path_skeleton, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
 
         repeticiones = 0
         contador_frames = 0
@@ -72,7 +76,7 @@ if video_path and st.button("🚀 Analizar Vídeo"):
         # Variables específicas para Pull-ups
         h_min = 0.0
         historial_h = deque(maxlen=3)
-        ventana_h = deque(maxlen=int(4.0 * max(fps, 1))) # max(fps, 1) para evitar fallos si fps es 0
+        ventana_h = deque(maxlen=int(4.0 * max(fps, 1))) 
         ultimo_frame_rep = -1000
 
         progress_bar = st.progress(0)
@@ -86,7 +90,10 @@ if video_path and st.button("🚀 Analizar Vídeo"):
             progress_bar.progress(min(contador_frames / total_frames, 1.0))
 
             resultados = model(frame, verbose=False, imgsz=320)
-            fotograma_dibujado = frame.copy()
+            
+            # Copiamos el fotograma original para las dos versiones
+            fotograma_limpio = frame.copy()
+            fotograma_esqueleto = frame.copy()
 
             if resultados[0].keypoints is not None and len(resultados[0].keypoints.xy) > 0:
                 cajas = resultados[0].boxes.xyxy.tolist()
@@ -94,7 +101,10 @@ if video_path and st.button("🚀 Analizar Vídeo"):
                 persona_idx = int(np.argmax(areas))
                 
                 res_aislado = resultados[0][persona_idx]
-                fotograma_dibujado = res_aislado.plot(img=frame.copy(), boxes=False, labels=False)
+                
+                # Pintamos el esqueleto (puntos y palos) SOLO en el fotograma del esqueleto
+                fotograma_esqueleto = res_aislado.plot(img=frame.copy(), boxes=False, labels=False)
+                
                 puntos = res_aislado.keypoints.xy[0]
                 conf = res_aislado.keypoints.conf
                 conf = conf[0] if conf is not None else None
@@ -152,7 +162,6 @@ if video_path and st.button("🚀 Analizar Vídeo"):
 
                 # LÓGICA: SQUAT SNATCH
                 elif modalidad == "Squat Snatch" and len(puntos) > 14 and conf is not None:
-                    # En OpenCV, la coordenada Y crece hacia abajo (0 arriba de la pantalla, máximo abajo)
                     ok = lambda idx: float(conf[idx]) > 0.4
                     P_y = lambda idx: float(puntos[idx][1]) 
 
@@ -170,40 +179,42 @@ if video_path and st.button("🚀 Analizar Vídeo"):
                     if None not in (y_muneca, y_hombro, y_cadera, y_rodilla):
                         torso_altura = abs(y_cadera - y_hombro)
 
-                        # 1. Barra sobre la cabeza (las muñecas tienen menor Y que los hombros)
                         barra_arriba = y_muneca < y_hombro
-
-                        # 2. Sentadilla profunda (la cadera baja, acercándose a las rodillas en Y)
-                        # Damos un margen de tolerancia basado en la longitud del torso
                         en_squat = y_cadera > (y_rodilla - 0.4 * torso_altura)
-
-                        # 3. Extensión completa (de pie, cadera alta, lejos de las rodillas)
                         de_pie = y_cadera < (y_rodilla - 0.9 * torso_altura)
 
                         if fase == "ABAJO":
-                            # Esperando la recepción en sentadilla
                             if barra_arriba and en_squat:
                                 fase = "SQUAT"
-                        
                         elif fase == "SQUAT":
                             if barra_arriba and de_pie:
-                                # El atleta se ha levantado completando el movimiento
                                 repeticiones += 1
                                 fase = "ABAJO"
                             elif not barra_arriba:
-                                # Si baja los brazos sin haberse levantado del todo, movimiento nulo
                                 fase = "ABAJO"
 
-            # Pintar repeticiones
-            cv2.rectangle(fotograma_dibujado, (10, 10), (160, 60), (0, 0, 0), -1)
-            cv2.putText(fotograma_dibujado, f"Reps: {repeticiones}", (20, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
-            out.write(fotograma_dibujado)
+            # Pintar el cuadro de repeticiones en AMBOS vídeos
+            for img in (fotograma_limpio, fotograma_esqueleto):
+                cv2.rectangle(img, (10, 10), (160, 60), (0, 0, 0), -1)
+                cv2.putText(img, f"Reps: {repeticiones}", (20, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
+            
+            # Guardamos un frame en cada vídeo
+            out_clean.write(fotograma_limpio)
+            out_skeleton.write(fotograma_esqueleto)
 
         cap.release()
-        out.release()
+        out_clean.release()
+        out_skeleton.release()
 
+        # --- MOSTRAR RESULTADOS EN LA INTERFAZ ---
         st.success("¡Análisis completado con éxito!")
         st.metric(label="Total de Repeticiones Válidas", value=repeticiones)
 
+        # 1. Vídeo normal por defecto
         st.subheader("Vídeo Analizado:")
-        st.video(output_path)
+        st.video(output_path_clean)
+
+        # 2. Desplegable opcional para ver el análisis de postura (esqueleto)
+        with st.expander("👁️ ¿Quieres ver cómo la IA analiza tus movimientos?"):
+            st.write("Aquí puedes ver el esqueleto digital de tu levantamiento. En el futuro, añadiremos aquí el análisis técnico de tu postura.")
+            st.video(output_path_skeleton)

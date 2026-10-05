@@ -29,24 +29,26 @@ if fuente_video == "Subir archivo":
 else:
     youtube_url = st.text_input("Pega el enlace de YouTube aquí:")
     if youtube_url:
-        with st.spinner("Descargando vídeo de YouTube..."):
+        with st.spinner("Descargando y convirtiendo vídeo de YouTube..."):
             try:
-                yt = YouTube(youtube_url)
-                # Busca el mejor stream que contenga video y audio, en formato mp4.
-                stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
-
-                if stream is None:
-                    st.error("No se encontró un formato mp4 compatible para este vídeo.")
-                else:
-                    # Descarga en un archivo temporal
-                    temp_dir = tempfile.gettempdir()
-                    # pytubefix maneja internamente la descarga de forma nativa
-                    downloaded_path = stream.download(output_path=temp_dir)
-                    video_path = downloaded_path
-                    st.success("Vídeo descargado correctamente. ¡Listo para analizar!")
+                # AQUÍ ESTÁ EL CÓDIGO CON LAS OPCIONES PARA USAR EL CONVERSOR
+                ydl_opts = {
+                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', 
+                    'outtmpl': tempfile.mktemp(suffix='.mp4'),
+                    'merge_output_format': 'mp4', # Esto fuerza la conversión a MP4
+                    'quiet': True,
+                    'noplaylist': True
+                }
+                
+                # Ejecutamos la descarga con esas opciones
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(youtube_url, download=True)
+                    video_path = ydl.prepare_filename(info)
+                    
+                st.success("Vídeo descargado correctamente. ¡Listo para analizar!")
             except Exception as e:
                 st.error(f"Error al descargar el vídeo: {e}")
-
+                
 @st.cache_resource
 def cargar_modelo():
     return YOLO('yolov8n-pose.pt')

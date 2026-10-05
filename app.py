@@ -31,11 +31,12 @@ else:
     if youtube_url:
         with st.spinner("Descargando vídeo de YouTube..."):
             try:
-                # Opciones para descargar el video
+                # Opciones para descargar el video (priorizando solo video, ya que la IA no necesita audio)
                 ydl_opts = {
-                    'format': 'best[ext=mp4]/best', 
+                    'format': 'bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best', 
                     'outtmpl': tempfile.mktemp(suffix='.mp4'), 
-                    'quiet': True
+                    'quiet': True,
+                    'noplaylist': True
                 }
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(youtube_url, download=True)

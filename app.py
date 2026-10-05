@@ -38,7 +38,6 @@ if video_path and st.button("🚀 Analizar Vídeo"):
         fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # CREAMOS DOS ARCHIVOS DE SALIDA: UNO LIMPIO Y OTRO CON EL ESQUELETO
         output_path_clean = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
         output_path_skeleton = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
         
@@ -57,6 +56,9 @@ if video_path and st.button("🚀 Analizar Vídeo"):
         ventana_h = deque(maxlen=int(4.0 * max(fps, 1))) 
         ultimo_frame_rep = -1000
 
+        # Variables específicas para Squat Snatch
+        ultimo_frame_snatch = -1000
+
         progress_bar = st.progress(0)
 
         while cap.isOpened():
@@ -69,7 +71,6 @@ if video_path and st.button("🚀 Analizar Vídeo"):
 
             resultados = model(frame, verbose=False, imgsz=320)
             
-            # Copiamos el fotograma original para las dos versiones
             fotograma_limpio = frame.copy()
             fotograma_esqueleto = frame.copy()
 
@@ -80,103 +81,108 @@ if video_path and st.button("🚀 Analizar Vídeo"):
                 
                 res_aislado = resultados[0][persona_idx]
                 
-                # Pintamos el esqueleto SOLO en el fotograma del esqueleto
+                # Pintamos el esqueleto explícitamente
                 fotograma_esqueleto = res_aislado.plot(img=frame.copy(), boxes=False, labels=False)
                 
                 puntos = res_aislado.keypoints.xy[0]
                 conf = res_aislado.keypoints.conf
                 conf = conf[0] if conf is not None else None
 
-                # LÓGICA: PULL-UPS
-                if modalidad == "Pull-ups (Dominadas)" and len(puntos) > 12 and conf is not None:
-                    ok = lambda idx: float(conf[idx]) > 0.4
-                    P = lambda idx: np.array([float(puntos[idx][0]), float(puntos[idx][1])])
+                if conf is not None and len(puntos) > 14:
 
-                    if ok(5) and ok(6) and ok(11) and ok(12):
-                        hombro_mid = (P(5) + P(6)) / 2
-                        cadera_mid = (P(11) + P(12)) / 2
-                        eje = hombro_mid - cadera_mid
-                        torso = float(np.linalg.norm(eje))
-                        
-                        if torso > 20:
-                            u = eje / torso
-                            s = lambda p: float(np.dot(p, u))
-                            s_hombro = s(hombro_mid)
+                    # LÓGICA: PULL-UPS
+                    if modalidad == "Pull-ups (Dominadas)":
+                        ok = lambda idx: float(conf[idx]) > 0.4
+                        P = lambda idx: np.array([float(puntos[idx][0]), float(puntos[idx][1])])
+
+                        if ok(5) and ok(6) and ok(11) and ok(12):
+                            hombro_mid = (P(5) + P(6)) / 2
+                            cadera_mid = (P(11) + P(12)) / 2
+                            eje = hombro_mid - cadera_mid
+                            torso = float(np.linalg.norm(eje))
                             
-                            munecas = [P(i) for i in (9, 10) if ok(i) and s(P(i)) > s_hombro - 0.2 * torso]
-                            if len(munecas) > 0:
-                                s_barra = sum(s(m) for m in munecas) / len(munecas)
-                                orejas = [(float(conf[i]), P(i)) for i in (3, 4) if float(conf[i]) > 0.2]
+                            if torso > 20:
+                                u = eje / torso
+                                s = lambda p: float(np.dot(p, u))
+                                s_hombro = s(hombro_mid)
                                 
-                                if len(orejas) > 0:
-                                    punto_cabeza = max(orejas, key=lambda x: x[0])[1]
-                                    barbilla = punto_cabeza - u * (0.20 * torso)
-                                else:
-                                    barbilla = hombro_mid + u * (0.25 * torso)
+                                munecas = [P(i) for i in (9, 10) if ok(i) and s(P(i)) > s_hombro - 0.2 * torso]
+                                if len(munecas) > 0:
+                                    s_barra = sum(s(m) for m in munecas) / len(munecas)
+                                    orejas = [(float(conf[i]), P(i)) for i in (3, 4) if float(conf[i]) > 0.2]
+                                    
+                                    if len(orejas) > 0:
+                                        punto_cabeza = max(orejas, key=lambda x: x[0])[1]
+                                        barbilla = punto_cabeza - u * (0.20 * torso)
+                                    else:
+                                        barbilla = hombro_mid + u * (0.25 * torso)
 
-                                h_bruto = (s_barra - s(barbilla)) / torso - 0.15
-                                historial_h.append(h_bruto)
-                                h = sum(historial_h) / len(historial_h)
-                                ventana_h.append(h)
+                                    h_bruto = (s_barra - s(barbilla)) / torso - 0.15
+                                    historial_h.append(h_bruto)
+                                    h = sum(historial_h) / len(historial_h)
+                                    ventana_h.append(h)
 
-                                hang_ref = float(np.percentile(ventana_h, 80)) if len(ventana_h) >= 15 else 1.0
-                                recorrido = hang_ref - h
+                                    hang_ref = float(np.percentile(ventana_h, 80)) if len(ventana_h) >= 15 else 1.0
+                                    recorrido = hang_ref - h
 
-                                if fase == "ABAJO":
-                                    if recorrido >= 0.15:
-                                        fase = "SUBIENDO"
-                                        h_min = h
-                                elif fase == "SUBIENDO":
-                                    h_min = min(h_min, h)
-                                    if (h - h_min) > 0.08:  
-                                        drop_pico = hang_ref - h_min
-                                        if drop_pico >= 0.30 and (contador_frames - ultimo_frame_rep) >= int(0.6 * fps):
-                                            repeticiones += 1
-                                            ultimo_frame_rep = contador_frames
-                                        fase = "BAJANDO"
-                                elif fase == "BAJANDO":
-                                    if h >= h_min + 0.5 * (hang_ref - h_min):
-                                        fase = "ABAJO"
+                                    if fase == "ABAJO":
+                                        if recorrido >= 0.15:
+                                            fase = "SUBIENDO"
+                                            h_min = h
+                                    elif fase == "SUBIENDO":
+                                        h_min = min(h_min, h)
+                                        if (h - h_min) > 0.08:  
+                                            drop_pico = hang_ref - h_min
+                                            if drop_pico >= 0.30 and (contador_frames - ultimo_frame_rep) >= int(0.6 * fps):
+                                                repeticiones += 1
+                                                ultimo_frame_rep = contador_frames
+                                            fase = "BAJANDO"
+                                    elif fase == "BAJANDO":
+                                        if h >= h_min + 0.5 * (hang_ref - h_min):
+                                            fase = "ABAJO"
 
-                # LÓGICA: SQUAT SNATCH
-                elif modalidad == "Squat Snatch" and len(puntos) > 14 and conf is not None:
-                    ok = lambda idx: float(conf[idx]) > 0.4
-                    P_y = lambda idx: float(puntos[idx][1]) 
+                    # LÓGICA: SQUAT SNATCH (Revisada y flexible)
+                    elif modalidad == "Squat Snatch":
+                        ok = lambda idx: float(conf[idx]) > 0.3
+                        P_y = lambda idx: float(puntos[idx][1]) 
 
-                    def get_media_y(idx1, idx2):
-                        if ok(idx1) and ok(idx2): return (P_y(idx1) + P_y(idx2)) / 2
-                        elif ok(idx1): return P_y(idx1)
-                        elif ok(idx2): return P_y(idx2)
-                        return None
+                        def get_media_y(idx1, idx2):
+                            if ok(idx1) and ok(idx2): return (P_y(idx1) + P_y(idx2)) / 2
+                            elif ok(idx1): return P_y(idx1)
+                            elif ok(idx2): return P_y(idx2)
+                            return None
 
-                    y_muneca = get_media_y(9, 10)
-                    y_hombro = get_media_y(5, 6)
-                    y_cadera = get_media_y(11, 12)
-                    y_rodilla = get_media_y(13, 14)
+                        y_muneca = get_media_y(9, 10)
+                        y_hombro = get_media_y(5, 6)
+                        y_cadera = get_media_y(11, 12)
+                        y_rodilla = get_media_y(13, 14)
 
-                    if None not in (y_muneca, y_hombro, y_cadera, y_rodilla):
-                        torso_altura = abs(y_cadera - y_hombro)
+                        if None not in (y_muneca, y_hombro, y_cadera, y_rodilla):
+                            # Barra arriba: muñecas claramente por encima de los hombros (en coordenadas de pantalla Y es menor arriba)
+                            barra_arriba = y_muneca < (y_hombro + 20)
+                            
+                            # Sentadilla: la cadera baja respecto a las rodillas
+                            en_squat = y_cadera >= (y_rodilla - 25)
+                            
+                            # De pie: la cadera sube por encima de las rodillas
+                            de_pie = y_cadera < (y_rodilla - 40)
 
-                        barra_arriba = y_muneca < y_hombro
-                        en_squat = y_cadera > (y_rodilla - 0.4 * torso_altura)
-                        de_pie = y_cadera < (y_rodilla - 0.9 * torso_altura)
+                            if fase == "ABAJO":
+                                if barra_arriba and en_squat:
+                                    fase = "SQUAT"
+                            elif fase == "SQUAT":
+                                if barra_arriba and de_pie and (contador_frames - ultimo_frame_snatch) >= int(0.8 * fps):
+                                    repeticiones += 1
+                                    ultimo_frame_snatch = contador_frames
+                                    fase = "ABAJO"
+                                elif not barra_arriba and y_cadera > y_rodilla + 50:
+                                    fase = "ABAJO"
 
-                        if fase == "ABAJO":
-                            if barra_arriba and en_squat:
-                                fase = "SQUAT"
-                        elif fase == "SQUAT":
-                            if barra_arriba and de_pie:
-                                repeticiones += 1
-                                fase = "ABAJO"
-                            elif not barra_arriba:
-                                fase = "ABAJO"
-
-            # Pintar el cuadro de repeticiones en AMBOS vídeos
+            # Pintar contadores
             for img in (fotograma_limpio, fotograma_esqueleto):
-                cv2.rectangle(img, (10, 10), (160, 60), (0, 0, 0), -1)
+                cv2.rectangle(img, (10, 10), (180, 60), (0, 0, 0), -1)
                 cv2.putText(img, f"Reps: {repeticiones}", (20, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
             
-            # Guardamos un frame en cada vídeo
             out_clean.write(fotograma_limpio)
             out_skeleton.write(fotograma_esqueleto)
 
@@ -184,15 +190,12 @@ if video_path and st.button("🚀 Analizar Vídeo"):
         out_clean.release()
         out_skeleton.release()
 
-        # --- MOSTRAR RESULTADOS EN LA INTERFAZ ---
         st.success("¡Análisis completado con éxito!")
         st.metric(label="Total de Repeticiones Válidas", value=repeticiones)
 
-        # 1. Vídeo normal por defecto
         st.subheader("Vídeo Analizado:")
         st.video(output_path_clean)
 
-        # 2. Desplegable opcional para ver el análisis de postura (esqueleto)
         with st.expander("👁️ ¿Quieres ver cómo la IA analiza tus movimientos?"):
             st.write("Aquí puedes ver el esqueleto digital de tu levantamiento.")
             st.video(output_path_skeleton)

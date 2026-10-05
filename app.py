@@ -31,9 +31,9 @@ else:
     if youtube_url:
         with st.spinner("Descargando vídeo de YouTube..."):
             try:
-                # Opciones para descargar el video en formato mp4 compatible
+                # Opciones para descargar el video
                 ydl_opts = {
-                    'format': 'best[ext=mp4]', 
+                    'format': 'best[ext=mp4]/best', 
                     'outtmpl': tempfile.mktemp(suffix='.mp4'), 
                     'quiet': True
                 }

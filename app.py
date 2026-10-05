@@ -31,24 +31,20 @@ else:
     if youtube_url:
         with st.spinner("Descargando y convirtiendo vídeo de YouTube..."):
             try:
-                # AQUÍ ESTÁ EL CÓDIGO CON LAS OPCIONES PARA USAR EL CONVERSOR
                 ydl_opts = {
                     'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', 
                     'outtmpl': tempfile.mktemp(suffix='.mp4'),
-                    'merge_output_format': 'mp4', # Esto fuerza la conversión a MP4
+                    'merge_output_format': 'mp4',
                     'quiet': True,
                     'noplaylist': True
                 }
-                
-                # Ejecutamos la descarga con esas opciones
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(youtube_url, download=True)
                     video_path = ydl.prepare_filename(info)
-                    
                 st.success("Vídeo descargado correctamente. ¡Listo para analizar!")
             except Exception as e:
                 st.error(f"Error al descargar el vídeo: {e}")
-                
+
 @st.cache_resource
 def cargar_modelo():
     return YOLO('yolov8n-pose.pt')
@@ -64,19 +60,19 @@ if video_path and st.button("🚀 Analizar Vídeo"):
         fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # Archivo temporal de salida
         output_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
-        # mp4v suele dar mejor compatibilidad en navegadores modernos al mostrarlo en Streamlit
         out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
 
         repeticiones = 0
         contador_frames = 0
         
-        # Variables de lógica para Pull-ups (Simplificadas sin cálculo de velocidad)
+        # Variables de estado
         fase = "ABAJO"
+        
+        # Variables específicas para Pull-ups
         h_min = 0.0
         historial_h = deque(maxlen=3)
-        ventana_h = deque(maxlen=int(4.0 * fps))
+        ventana_h = deque(maxlen=int(4.0 * max(fps, 1))) # max(fps, 1) para evitar fallos si fps es 0
         ultimo_frame_rep = -1000
 
         progress_bar = st.progress(0)
@@ -103,6 +99,7 @@ if video_path and st.button("🚀 Analizar Vídeo"):
                 conf = res_aislado.keypoints.conf
                 conf = conf[0] if conf is not None else None
 
+                # LÓGICA: PULL-UPS
                 if modalidad == "Pull-ups (Dominadas)" and len(puntos) > 12 and conf is not None:
                     ok = lambda idx: float(conf[idx]) > 0.4
                     P = lambda idx: np.array([float(puntos[idx][0]), float(puntos[idx][1])])
@@ -137,14 +134,13 @@ if video_path and st.button("🚀 Analizar Vídeo"):
                                 hang_ref = float(np.percentile(ventana_h, 80)) if len(ventana_h) >= 15 else 1.0
                                 recorrido = hang_ref - h
 
-                                # Lógica de conteo (Solo tracking espacial)
                                 if fase == "ABAJO":
                                     if recorrido >= 0.15:
                                         fase = "SUBIENDO"
                                         h_min = h
                                 elif fase == "SUBIENDO":
                                     h_min = min(h_min, h)
-                                    if (h - h_min) > 0.08:  # Detecta inicio de bajada
+                                    if (h - h_min) > 0.08:  
                                         drop_pico = hang_ref - h_min
                                         if drop_pico >= 0.30 and (contador_frames - ultimo_frame_rep) >= int(0.6 * fps):
                                             repeticiones += 1
@@ -154,7 +150,51 @@ if video_path and st.button("🚀 Analizar Vídeo"):
                                     if h >= h_min + 0.5 * (hang_ref - h_min):
                                         fase = "ABAJO"
 
-            # Pintar repeticiones en el vídeo
+                # LÓGICA: SQUAT SNATCH
+                elif modalidad == "Squat Snatch" and len(puntos) > 14 and conf is not None:
+                    # En OpenCV, la coordenada Y crece hacia abajo (0 arriba de la pantalla, máximo abajo)
+                    ok = lambda idx: float(conf[idx]) > 0.4
+                    P_y = lambda idx: float(puntos[idx][1]) 
+
+                    def get_media_y(idx1, idx2):
+                        if ok(idx1) and ok(idx2): return (P_y(idx1) + P_y(idx2)) / 2
+                        elif ok(idx1): return P_y(idx1)
+                        elif ok(idx2): return P_y(idx2)
+                        return None
+
+                    y_muneca = get_media_y(9, 10)
+                    y_hombro = get_media_y(5, 6)
+                    y_cadera = get_media_y(11, 12)
+                    y_rodilla = get_media_y(13, 14)
+
+                    if None not in (y_muneca, y_hombro, y_cadera, y_rodilla):
+                        torso_altura = abs(y_cadera - y_hombro)
+
+                        # 1. Barra sobre la cabeza (las muñecas tienen menor Y que los hombros)
+                        barra_arriba = y_muneca < y_hombro
+
+                        # 2. Sentadilla profunda (la cadera baja, acercándose a las rodillas en Y)
+                        # Damos un margen de tolerancia basado en la longitud del torso
+                        en_squat = y_cadera > (y_rodilla - 0.4 * torso_altura)
+
+                        # 3. Extensión completa (de pie, cadera alta, lejos de las rodillas)
+                        de_pie = y_cadera < (y_rodilla - 0.9 * torso_altura)
+
+                        if fase == "ABAJO":
+                            # Esperando la recepción en sentadilla
+                            if barra_arriba and en_squat:
+                                fase = "SQUAT"
+                        
+                        elif fase == "SQUAT":
+                            if barra_arriba and de_pie:
+                                # El atleta se ha levantado completando el movimiento
+                                repeticiones += 1
+                                fase = "ABAJO"
+                            elif not barra_arriba:
+                                # Si baja los brazos sin haberse levantado del todo, movimiento nulo
+                                fase = "ABAJO"
+
+            # Pintar repeticiones
             cv2.rectangle(fotograma_dibujado, (10, 10), (160, 60), (0, 0, 0), -1)
             cv2.putText(fotograma_dibujado, f"Reps: {repeticiones}", (20, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
             out.write(fotograma_dibujado)

@@ -2,4 +2,4 @@ streamlit
 opencv-python-headless
 ultralytics
 numpy
-pytubefix
+yt-dlp

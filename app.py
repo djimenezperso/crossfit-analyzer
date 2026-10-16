@@ -22,8 +22,9 @@ TR = {
  "fr": {
   "titre": "🏋️ Comparateur de technique haltérophile",
   "intro": "Compare la technique d'un élève avec une vidéo modèle : angles articulaires, phases et vidéo synchronisée.",
-  "ex_label": "Exercice", "ex_sn": "Squat Snatch", "ex_cj": "Épaulé-jeté (Clean & Jerk)",
-  "ex_cl": "Épaulé seul (Clean)", "ex_jk": "Jeté seul (Jerk)",
+  "ex_label": "Exercice", "ex_sn": "Squat Snatch", "ex_cj": "Épaulé-jeté (Clean & Jerk) 🧪 test",
+  "ex_cl": "Épaulé seul (Clean) 🧪 test", "ex_jk": "Jeté seul (Jerk) 🧪 test",
+  "beta": "🧪 **Mode test.** Cet exercice est en cours de mise au point : si quelque chose ne fonctionne pas, c'est normal. Écris-moi sur Instagram **@djimenez.cf** pour me le signaler.",
   "ref_cut": "✂️ Modèle découpé automatiquement : {a} s → {b} s ({part}).",
   "part_cl": "épaulé uniquement", "part_jk": "jeté uniquement",
   "reglages": "Réglages", "p_fast": "⚡ Rapide", "p_bal": "⚖️ Équilibré", "p_prec": "🎯 Précis",
@@ -80,8 +81,9 @@ TR = {
  "es": {
   "titre": "🏋️ Comparador de técnica de halterofilia",
   "intro": "Compara la técnica de un alumno con un vídeo modelo: ángulos articulares, fases y vídeo sincronizado.",
-  "ex_label": "Ejercicio", "ex_sn": "Arrancada (squat snatch)", "ex_cj": "Cargada y envión (Clean & Jerk)",
-  "ex_cl": "Solo cargada (Clean)", "ex_jk": "Solo envión (Jerk)",
+  "ex_label": "Ejercicio", "ex_sn": "Arrancada (squat snatch)", "ex_cj": "Cargada y envión (Clean & Jerk) 🧪 test",
+  "ex_cl": "Solo cargada (Clean) 🧪 test", "ex_jk": "Solo envión (Jerk) 🧪 test",
+  "beta": "🧪 **Modo prueba.** Este ejercicio se está poniendo a punto: si algo no funciona, es normal. Escríbeme en Instagram **@djimenez.cf** para avisarme.",
   "ref_cut": "✂️ Modelo recortado automáticamente: {a} s → {b} s ({part}).",
   "part_cl": "solo la cargada", "part_jk": "solo el envión",
   "reglages": "Ajustes", "p_fast": "⚡ Rápido", "p_bal": "⚖️ Equilibrado", "p_prec": "🎯 Preciso",
@@ -189,6 +191,8 @@ SESS = os.path.join(SESS_ROOT, sid)
 os.makedirs(SESS, exist_ok=True)
 
 exercice = st.radio(t("ex_label"), ["sn", "cj", "cl", "jk"], format_func=lambda k: t("ex_" + k), horizontal=True)
+if exercice != "sn":
+    st.info(t("beta"))
 cj = exercice != "sn"  # épaulé-jeté, épaulé seul ou jeté seul : mêmes caractéristiques de barre pour l'alignement
 
 with st.sidebar:

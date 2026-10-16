@@ -23,6 +23,9 @@ TR = {
   "titre": "🏋️ Comparateur de technique haltérophile",
   "intro": "Compare la technique d'un élève avec une vidéo modèle : angles articulaires, phases et vidéo synchronisée.",
   "ex_label": "Exercice", "ex_sn": "Squat Snatch", "ex_cj": "Épaulé-jeté (Clean & Jerk)",
+  "ex_cl": "Épaulé seul (Clean)", "ex_jk": "Jeté seul (Jerk)",
+  "ref_cut": "✂️ Modèle découpé automatiquement : {a} s → {b} s ({part}).",
+  "part_cl": "épaulé uniquement", "part_jk": "jeté uniquement",
   "reglages": "Réglages", "p_fast": "⚡ Rapide", "p_bal": "⚖️ Équilibré", "p_prec": "🎯 Précis",
   "preset_label": "Vitesse / précision",
   "preset_help": "Rapide : modèle léger, 1 image sur 2. Précis : plus lent mais plus fiable.",
@@ -51,6 +54,8 @@ TR = {
   "cut_text": "Garde seulement le moment entre le départ et la fin du mouvement, debout avec la barre en haut (enlève les célébrations, la barre lâchée, etc.).",
   "n_ref": "Modèle", "n_al": "Élève", "debut": "début", "fin": "fin",
   "auto_cut": "✂️ Pause détectée et ignorée : mouvement entre {a} s et {b} s (ajuste si besoin).",
+  "done_hint": "✅ Analyse terminée — fais défiler vers le bas pour voir les résultats ⬇️",
+  "notes_title": "ℹ️ Remarques sur la qualité de la vidéo ({n})",
   "too_short": "Le segment est trop court.",
   "too_long": "Segment trop long pour l'alignement (max. ~1200 images). Raccourcis-le.",
   "dtw": "Alignement des mouvements (DTW)...", "res_title": "2️⃣ Résultats",
@@ -76,6 +81,9 @@ TR = {
   "titre": "🏋️ Comparador de técnica de halterofilia",
   "intro": "Compara la técnica de un alumno con un vídeo modelo: ángulos articulares, fases y vídeo sincronizado.",
   "ex_label": "Ejercicio", "ex_sn": "Arrancada (squat snatch)", "ex_cj": "Cargada y envión (Clean & Jerk)",
+  "ex_cl": "Solo cargada (Clean)", "ex_jk": "Solo envión (Jerk)",
+  "ref_cut": "✂️ Modelo recortado automáticamente: {a} s → {b} s ({part}).",
+  "part_cl": "solo la cargada", "part_jk": "solo el envión",
   "reglages": "Ajustes", "p_fast": "⚡ Rápido", "p_bal": "⚖️ Equilibrado", "p_prec": "🎯 Preciso",
   "preset_label": "Velocidad / precisión",
   "preset_help": "Rápido: modelo ligero, 1 imagen de cada 2. Preciso: más lento pero más fiable.",
@@ -104,6 +112,8 @@ TR = {
   "cut_text": "Deja solo el momento entre la salida y el final del movimiento, de pie con la barra arriba (quita celebraciones, la barra soltada, etc.).",
   "n_ref": "Modelo", "n_al": "Alumno", "debut": "inicio", "fin": "fin",
   "auto_cut": "✂️ Pausa detectada y omitida: movimiento entre {a} s y {b} s (ajusta si hace falta).",
+  "done_hint": "✅ Análisis terminado — desplázate hacia abajo para ver los resultados ⬇️",
+  "notes_title": "ℹ️ Notas sobre la calidad del vídeo ({n})",
   "too_short": "El segmento es demasiado corto.",
   "too_long": "Segmento demasiado largo para alinear (máx. ~1200 fotogramas). Recórtalo más.",
   "dtw": "Alineando los movimientos (DTW)...", "res_title": "2️⃣ Resultados",
@@ -178,8 +188,8 @@ if not sid:
 SESS = os.path.join(SESS_ROOT, sid)
 os.makedirs(SESS, exist_ok=True)
 
-exercice = st.radio(t("ex_label"), ["sn", "cj"], format_func=lambda k: t("ex_" + k), horizontal=True)
-cj = exercice == "cj"
+exercice = st.radio(t("ex_label"), ["sn", "cj", "cl", "jk"], format_func=lambda k: t("ex_" + k), horizontal=True)
+cj = exercice != "sn"  # épaulé-jeté, épaulé seul ou jeté seul : mêmes caractéristiques de barre pour l'alignement
 
 with st.sidebar:
     st.header(t("reglages"))
@@ -396,20 +406,21 @@ def vers_h264(path):
 col1, col2 = st.columns(2)
 with col1:
     st.subheader(t("v_modele"))
-    REF_PATH = REF_CJ if cj else REF_SNATCH
+    REF_PATH = REF_CJ if cj else REF_SNATCH  # épaulé seul / jeté seul : on découpe le modèle complet
     existe = os.path.exists(REF_PATH)
     perso = st.checkbox(t("own"), value=not existe, disabled=not existe, help=t("own_help"))
     if existe and not perso:
         path_ref = REF_PATH
         st.success(t("using", p=REF_PATH))
     else:
-        path_ref = zone_upload(t("up_model"), "ref_cj" if cj else "ref_sn", f"ref_{int(cj)}")
+        path_ref = zone_upload(t("up_model"), f"ref_{exercice}", f"ref_{exercice}")
 with col2:
     st.subheader(t("v_eleve"))
-    path_al = zone_upload(t("up_eleve"), "al", "al")
+    path_al = zone_upload(t("up_eleve"), f"al_{exercice}", f"al_{exercice}")
 
 if not (path_ref and path_al):
     st.stop()
+modele_integre = bool(existe and not perso)  # le modèle du dépôt est complet (épaulé + jeté)
 
 CL = {role: (empreinte(path), modele_nom, imgsz, saut) for role, path in (("ref", path_ref), ("al", path_al))}
 
@@ -458,12 +469,18 @@ lado_r, lado_a = su.lado_visible(R["kps"]), su.lado_visible(A["kps"])
 df_r, df_a = su.calcular_metricas(R["kps"], lado_r), su.calcular_metricas(A["kps"], lado_a)
 nom_cote = {"izquierdo": t("side_left"), "derecho": t("side_right")}
 
+notes = []
 for nom_de, d, lado in ((t("de_ref"), R, lado_r), (t("de_al"), A, lado_a)):
     rat, cob = su.ratio_lateral(d["kps"], lado), su.cobertura(d["kps"], lado)
-    if rat is not None and rat > 0.45:
-        st.warning(t("w_side", nom_de=nom_de, rat=rat))
+    if rat is not None and rat > 0.6:
+        notes.append(t("w_side", nom_de=nom_de, rat=rat))
     if cob < 0.7:
-        st.warning(t("w_cov", nom_de=nom_de, cob=cob))
+        notes.append(t("w_cov", nom_de=nom_de, cob=cob))
+st.success(t("done_hint"))
+if notes:
+    with st.expander(t("notes_title", n=len(notes)), expanded=False):
+        for n_ in notes:
+            st.markdown(f"- {n_}")
 st.caption(t("side_cap", m=nom_cote[lado_r], a=nom_cote[lado_a]))
 
 # ------------------------------------------------------------------- découpage
@@ -475,10 +492,22 @@ for col, role, d, nom in ((c1, "ref", R, t("n_ref")), (c2, "al", A, t("n_al"))):
     with col:
         n, fps = len(d["kps"]), d["fps"]
         dur = float(round(n / fps, 1))
-        seg_auto = su.segment_actif(df_r if role == "ref" else df_a, fps)
-        defaut = (min(float(seg_auto[0]), dur), min(float(seg_auto[1]), dur)) if seg_auto else (0.0, dur)
-        t0, t1 = st.slider(f"{nom} (s)", 0.0, dur, defaut, 0.1, key=f"s_{role}_{empreinte(d['path'])}")
-        if seg_auto:
+        df_c = df_r if role == "ref" else df_a
+        seg_auto = su.segment_actif(df_c, fps)
+        seg_ref = None
+        if role == "ref" and exercice in ("cl", "jk") and modele_integre:
+            ev0 = su.detectar_epaule_jete(df_c)
+            if ev0["cc"] is not None and ev0["pico"] is not None:
+                t_p = ev0["pico"] / fps
+                deb = seg_auto[0] if seg_auto else 0.0
+                fin_ = seg_auto[1] if seg_auto else dur
+                seg_ref = (deb, min(dur, t_p + 0.3)) if exercice == "cl" else (max(0.0, t_p - 0.3), fin_)
+        seg_def = seg_ref or seg_auto
+        defaut = (min(float(seg_def[0]), dur), min(float(seg_def[1]), dur)) if seg_def else (0.0, dur)
+        t0, t1 = st.slider(f"{nom} (s)", 0.0, dur, defaut, 0.1, key=f"s_{role}_{exercice}_{empreinte(d['path'])}")
+        if seg_ref:
+            st.caption(t("ref_cut", a=round(seg_ref[0], 1), b=round(seg_ref[1], 1), part=t("part_" + exercice)))
+        elif seg_auto:
             st.caption(t("auto_cut", a=seg_auto[0], b=seg_auto[1]))
         i0, i1 = int(t0 * fps), min(n - 1, int(t1 * fps))
         segs[role] = (i0, i1)
@@ -502,9 +531,16 @@ with st.spinner(t("dtw")):
     mapa = su.mapa_alumno_a_ref(path, len(sa))
 st.subheader(t("res_title"))
 if cj:
-    ev_r, ev_a = su.detectar_epaule_jete(sr), su.detectar_epaule_jete(sa)
-    pts = [("cc", "Réception épaulé"), ("dip", "Dip"), ("jc", "Réception jeté")]  # clés internes (fr)
-    cols = st.columns(3)
+    if exercice == "cl":
+        ev_r, ev_a = su.detectar_epaule(sr), su.detectar_epaule(sa)
+        pts = [("cc", "Réception épaulé")]
+    elif exercice == "jk":
+        ev_r, ev_a = su.detectar_jete(sr), su.detectar_jete(sa)
+        pts = [("dip", "Dip"), ("jc", "Réception jeté")]
+    else:
+        ev_r, ev_a = su.detectar_epaule_jete(sr), su.detectar_epaule_jete(sa)
+        pts = [("cc", "Réception épaulé"), ("dip", "Dip"), ("jc", "Réception jeté")]  # clés internes (fr)
+    cols = st.columns(len(pts))
     moments = {"Position de départ": (0, 0)}
     for col, (k, nom) in zip(cols, pts):
         if ev_r[k] is not None and ev_a[k] is not None:
@@ -515,16 +551,24 @@ if cj:
         else:
             col.metric(su.nom_moment(nom, LANG), t("undetected"))
     moments["Fin"] = (len(sr) - 1, len(sa) - 1)
-    if ev_r["cc"] is None or ev_a["cc"] is None or ev_r["jc"] is None or ev_a["jc"] is None:
+    if any(ev_r[k] is None or ev_a[k] is None for k, _ in pts if k in ("cc", "jc")):
         st.warning(t("w_cj"))
     st.caption(t("cap_cj"))
-    coupes = [v for v in (ev_r["cc"], ev_r["jc"]) if v is not None]
-    if len(coupes) == 2:
-        phases = {t("ph_pull"): [(i, j) for i, j in path if i <= coupes[0]],
-                  t("ph_dipjerk"): [(i, j) for i, j in path if coupes[0] < i <= coupes[1]],
-                  t("ph_final"): [(i, j) for i, j in path if i > coupes[1]]}
+    if exercice == "cj":
+        coupes = [v for v in (ev_r["cc"], ev_r["jc"]) if v is not None]
+        if len(coupes) == 2:
+            phases = {t("ph_pull"): [(i, j) for i, j in path if i <= coupes[0]],
+                      t("ph_dipjerk"): [(i, j) for i, j in path if coupes[0] < i <= coupes[1]],
+                      t("ph_final"): [(i, j) for i, j in path if i > coupes[1]]}
+        else:
+            phases = {t("ph_full"): list(path)}
     else:
-        phases = {t("ph_full"): list(path)}
+        c_ = ev_r["cc"] if exercice == "cl" else ev_r["jc"]
+        if c_ is not None:
+            phases = {t("ph_pull") if exercice == "cl" else t("ph_dipjerk"): [(i, j) for i, j in path if i <= c_],
+                      t("ph_rec") if exercice == "cl" else t("ph_final"): [(i, j) for i, j in path if i > c_]}
+        else:
+            phases = {t("ph_full"): list(path)}
 else:
     cr, ca = su.detectar_recepcion(sr), su.detectar_recepcion(sa)
     m1, m2, m3 = st.columns(3)

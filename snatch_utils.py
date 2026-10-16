@@ -94,6 +94,7 @@ def calcular_metricas(kps, lado):
         "Tronc": np.degrees(np.arctan2(np.abs(v[:, 0]), -v[:, 1])),  # 0° = vertical
         "_hip_rel": (ank[:, 1] - hip[:, 1]) / torso,   # altura de cadera sobre tobillo, en torsos
         "_wri_rel": (ank[:, 1] - wri[:, 1]) / torso,   # altura de muñeca (≈ barra), en torsos
+        "_wri_sho": (sho[:, 1] - wri[:, 1]) / torso,   # muñeca sobre hombro: <0 colgando, ~0 en rack, >0.5 por encima de la cabeza
     }
     return pd.DataFrame({k: _limpiar(x) for k, x in m.items()})
 
@@ -108,15 +109,45 @@ def detectar_recepcion(df):
     return int(idx[np.argmin(hip[idx])])
 
 
+def detectar_epaule_jete(df):
+    """Momentos clave del épaulé-jeté: 'cc' (réception de l'épaulé), 'dip', 'jc' (réception du jeté).
+    Devuelve None en el momento que no se pueda detectar."""
+    hip, ws = df["_hip_rel"].values, df["_wri_sho"].values
+    n = len(df)
+    res = {"cc": None, "dip": None, "jc": None}
+    over = np.where(ws > 0.5)[0]
+    if len(over) == 0:
+        return res
+    j0 = int(over[0])
+    # jeté: punto más bajo de cadera con la barra ya sobre la cabeza
+    res["jc"] = int(over[np.argmin(hip[over])])
+    # épaulé: cadera más baja con la barra en el rack (ni colgando ni sobre la cabeza), antes del jeté
+    rack = np.where((ws > -0.45) & (ws < 0.35) & (np.arange(n) < j0))[0]
+    if len(rack) == 0:
+        return res
+    res["cc"] = int(rack[np.argmin(hip[rack])])
+    # dip: tras levantarse del épaulé, punto más bajo de cadera antes de empujar la barra
+    tras = rack[rack > res["cc"]]
+    if len(tras) >= 3:
+        pico = tras[np.argmax(hip[tras])]
+        dip = tras[tras >= pico]
+        if len(dip) > 0:
+            res["dip"] = int(dip[np.argmin(hip[dip])])
+    return res
+
+
 # --------------------------------------------------------------------- DTW
-def _features(df):
-    return np.column_stack([df["Genou"] / 90, df["Hanche"] / 90, df["Tronc"] / 90,
-                            df["Coude"] / 90, df["_hip_rel"] / 1.5, df["_wri_rel"] / 1.5])
+def _features(df, cj=False):
+    cols = [df["Genou"] / 90, df["Hanche"] / 90, df["Tronc"] / 90, df["Coude"] / 90,
+            df["_hip_rel"] / 1.5, df["_wri_rel"] / 1.5]
+    if cj:
+        cols.append(df["_wri_sho"] / 1.0)
+    return np.column_stack(cols)
 
 
-def alinear_dtw(df_ref, df_al):
+def alinear_dtw(df_ref, df_al, cj=False):
     """DTW entre modelo y alumno. Devuelve lista de pares (i_ref, j_alumno)."""
-    a, b = _features(df_ref), _features(df_al)
+    a, b = _features(df_ref, cj), _features(df_al, cj)
     n, m = len(a), len(b)
     cost = np.linalg.norm(a[:, None, :] - b[None, :, :], axis=2)
     D = np.full((n + 1, m + 1), np.inf)
@@ -174,6 +205,26 @@ def pista(ang, momento, d):
                            "Genoux plus fléchis (moins verrouillés) que le modèle en fin de mouvement."),
         ("Coude", "Fin"): ("Coudes plus tendus que le modèle.",
                            "Coudes moins verrouillés que le modèle en fin de mouvement."),
+        ("Genou", "Réception épaulé"): ("Épaulé reçu plus haut que le modèle (genou plus tendu).",
+                                        "Épaulé reçu plus bas que le modèle (genou plus fléchi)."),
+        ("Hanche", "Réception épaulé"): ("Hanche plus ouverte à la réception de l'épaulé (buste plus droit).",
+                                         "Hanche plus fermée à la réception de l'épaulé (buste plus penché)."),
+        ("Tronc", "Réception épaulé"): ("Buste plus penché vers l'avant que le modèle à la réception de l'épaulé.",
+                                        "Buste plus vertical que le modèle à la réception de l'épaulé."),
+        ("Genou", "Dip"): ("Dip moins profond que le modèle (genou plus tendu).",
+                           "Dip plus profond que le modèle (genou plus fléchi)."),
+        ("Tronc", "Dip"): ("Buste plus penché vers l'avant pendant le dip.",
+                           "Buste plus vertical que le modèle pendant le dip."),
+        ("Hanche", "Dip"): ("Hanche plus ouverte pendant le dip.",
+                            "Hanche plus fermée pendant le dip."),
+        ("Genou", "Réception jeté"): ("Genou plus tendu que le modèle à la réception du jeté (vu de profil, un seul côté est visible).",
+                                      "Genou plus fléchi que le modèle à la réception du jeté (fente plus basse)."),
+        ("Coude", "Réception jeté"): ("Coudes plus tendus que le modèle à la réception du jeté.",
+                                      "Coudes moins tendus : barre peut-être non verrouillée au-dessus de la tête."),
+        ("Tronc", "Réception jeté"): ("Buste plus penché vers l'avant à la réception du jeté.",
+                                      "Buste plus vertical que le modèle à la réception du jeté."),
+        ("Hanche", "Réception jeté"): ("Hanche plus ouverte que le modèle à la réception du jeté.",
+                                       "Hanche plus fermée que le modèle à la réception du jeté."),
     }
     if (ang, momento) in t:
         return t[(ang, momento)][0 if mas else 1]

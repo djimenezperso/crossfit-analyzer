@@ -17,7 +17,24 @@
 <script>
 const S = (type, extra) => window.parent.postMessage(Object.assign({isStreamlitMessage: true, type}, extra || {}), "*");
 const $ = id => document.getElementById(id);
-let MAXSIDE = 720, BITRATE = 2500000;
+let MAXSIDE = 720, BITRATE = 2500000, LG = "fr";
+const M = {
+  fr: {pick: "Choisir une vidéo",
+       busy: mo => `Compression en cours (${mo} Mo)… garde cet écran ouvert.`,
+       done: (a, b) => `Compressée : ${a} Mo → ${b} Mo. Envoi…`,
+       sent: b => `✅ Envoyée (${b} Mo).`,
+       fail: e => `Échec de la compression : ${e}. Désactive l'option et utilise l'envoi normal.`,
+       e_read: "lecture de la vidéo impossible", e_support: "compression non supportée par ce navigateur",
+       e_fmt: "aucun format d'enregistrement disponible", e_res: "lecture du résultat impossible"},
+  es: {pick: "Elegir un vídeo",
+       busy: mo => `Comprimiendo (${mo} MB)… mantén esta pantalla abierta.`,
+       done: (a, b) => `Comprimido: ${a} MB → ${b} MB. Enviando…`,
+       sent: b => `✅ Enviado (${b} MB).`,
+       fail: e => `Error al comprimir: ${e}. Desactiva la opción y usa el envío normal.`,
+       e_read: "no se puede leer el vídeo", e_support: "este navegador no admite la compresión",
+       e_fmt: "ningún formato de grabación disponible", e_res: "no se puede leer el resultado"}
+};
+const L = k => M[LG][k];
 const hauteur = () => S("streamlit:setFrameHeight", {height: document.body.scrollHeight + 8});
 const msg = (t, err) => { $("st").textContent = t; $("st").className = err ? "err" : ""; hauteur(); };
 const prog = p => { $("barw").style.display = "block"; $("bar").style.width = Math.min(100, Math.round(p * 100)) + "%"; };
@@ -25,7 +42,8 @@ const prog = p => { $("barw").style.display = "block"; $("bar").style.width = Ma
 window.addEventListener("message", e => {
   if (e.data && e.data.type === "streamlit:render") {
     const a = e.data.args || {};
-    $("t").textContent = a.label || "Choisir une vidéo";
+    LG = M[a.lang] ? a.lang : "fr";
+    $("t").textContent = a.label || L("pick");
     MAXSIDE = a.max_side || 720;
     BITRATE = a.bitrate || 2500000;
     hauteur();
@@ -41,15 +59,15 @@ async function compresser(file) {
   v.style.cssText = "position:fixed;width:2px;height:2px;opacity:0;pointer-events:none";
   document.body.appendChild(v);
   v.src = url;
-  await new Promise((ok, ko) => { v.onloadedmetadata = ok; v.onerror = () => ko(new Error("lecture de la vidéo impossible")); });
+  await new Promise((ok, ko) => { v.onloadedmetadata = ok; v.onerror = () => ko(new Error(L("e_read"))); });
   const sc = Math.min(1, MAXSIDE / Math.max(v.videoWidth, v.videoHeight));
   const w = Math.max(2, Math.round(v.videoWidth * sc / 2) * 2), h = Math.max(2, Math.round(v.videoHeight * sc / 2) * 2);
   const c = document.createElement("canvas"); c.width = w; c.height = h;
   const ctx = c.getContext("2d");
-  if (!c.captureStream || !window.MediaRecorder) throw new Error("compression non supportée par ce navigateur");
+  if (!c.captureStream || !window.MediaRecorder) throw new Error(L("e_support"));
   const types = ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
   const mime = types.find(t => MediaRecorder.isTypeSupported(t));
-  if (!mime) throw new Error("aucun format d'enregistrement disponible");
+  if (!mime) throw new Error(L("e_fmt"));
   const rec = new MediaRecorder(c.captureStream(30), {mimeType: mime, videoBitsPerSecond: BITRATE});
   const morceaux = [];
   rec.ondataavailable = e => { if (e.data && e.data.size) morceaux.push(e.data); };
@@ -75,20 +93,20 @@ $("f").addEventListener("change", async ev => {
   if (!file) return;
   $("lbl").classList.add("off");
   const mo = file.size / 1e6;
-  msg(`Compression en cours (${mo.toFixed(0)} Mo)… garde cet écran ouvert.`);
+  msg(L("busy")(mo.toFixed(0)));
   try {
     const r = await compresser(file);
-    msg(`Compressée : ${mo.toFixed(0)} Mo → ${(r.blob.size / 1e6).toFixed(1)} Mo. Envoi…`);
+    msg(L("done")(mo.toFixed(0), (r.blob.size / 1e6).toFixed(1)));
     const b64 = await new Promise((ok, ko) => {
       const fr = new FileReader();
       fr.onload = () => ok(String(fr.result).split(",")[1]);
-      fr.onerror = () => ko(new Error("lecture du résultat impossible"));
+      fr.onerror = () => ko(new Error(L("e_res")));
       fr.readAsDataURL(r.blob);
     });
     S("streamlit:setComponentValue", {value: {name: file.name, size: r.blob.size, mime: r.mime, w: r.w, h: r.h, data: b64}, dataType: "json"});
-    msg(`✅ Envoyée (${(r.blob.size / 1e6).toFixed(1)} Mo).`);
+    msg(L("sent")((r.blob.size / 1e6).toFixed(1)));
   } catch (e) {
-    msg("Échec de la compression : " + e.message + ". Désactive l'option et utilise l'envoi normal.", true);
+    msg(L("fail")(e.message), true);
   }
   $("lbl").classList.remove("off");
 });

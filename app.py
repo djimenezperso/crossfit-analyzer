@@ -1,3 +1,4 @@
+import hashlib
 import os
 import shutil
 import subprocess
@@ -23,13 +24,14 @@ cj = exercice.startswith("Épaulé")
 
 with st.sidebar:
     st.header("Réglages")
-    modele_nom = st.selectbox("Modèle de pose", ["yolov8s-pose.pt", "yolov8n-pose.pt", "yolov8m-pose.pt"],
-                              help="n = le plus rapide, m = le plus précis.")
-    imgsz = st.select_slider("Résolution d'analyse", [320, 480, 640, 960], value=480)
-    saut = st.select_slider("Analyser 1 image sur…", [1, 2, 3], value=1,
-                            help="2 = deux fois plus rapide, mais moins précis. Le reste est interpolé.")
+    PRESETS = {"⚡ Rapide": ("yolov8n-pose.pt", 320, 2),
+               "⚖️ Équilibré": ("yolov8s-pose.pt", 480, 1),
+               "🎯 Précis": ("yolov8m-pose.pt", 640, 1)}
+    preset = st.selectbox("Vitesse / précision", list(PRESETS), index=0,
+                          help="Rapide : modèle léger, 1 image sur 2. Précis : plus lent mais plus fiable.")
+    modele_nom, imgsz, saut = PRESETS[preset]
     seuil = st.slider("Seuil d'écart (degrés)", 5, 30, 15)
-    st.caption("Plus de résolution et un modèle plus gros = plus précis mais plus lent.")
+    st.caption("Une vidéo déjà analysée avec le même réglage est réutilisée instantanément.")
 
 st.info("📹 **Comment filmer :** vue **de profil** (90° par rapport au plan du mouvement), caméra fixe à hauteur "
         "de hanche, à 3-4 m, corps entier visible et du même côté que la vidéo modèle.")
@@ -85,6 +87,24 @@ def extraire_keypoints(path, modele, imgsz, saut, barre):
     return dict(kps=kps, fps=fps, size=(w, h))
 
 
+@st.cache_resource
+def cache_poses():
+    return {}
+
+
+def empreinte(path):
+    """Identifiant rapide d'un fichier (taille + début + fin) pour réutiliser une analyse déjà faite."""
+    h = hashlib.md5()
+    size = os.path.getsize(path)
+    h.update(str(size).encode())
+    with open(path, "rb") as fh:
+        h.update(fh.read(1 << 20))
+        fh.seek(max(size - (1 << 20), 0))
+        h.update(fh.read(1 << 20))
+    return h.hexdigest()
+
+
+@st.cache_data(show_spinner=False)
 def lire_image(path, idx):
     cap = cv2.VideoCapture(path)
     cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
@@ -126,11 +146,20 @@ if not (path_ref and path_al):
     st.stop()
 
 if st.button("🚀 Analyser les vidéos (extraire les poses)", type="primary"):
-    modele = charger_modele(modele_nom)
+    cache = cache_poses()
+    modele = None
     for role, path, nom in (("ref", path_ref, "modèle"), ("al", path_al, "élève")):
-        st.write(f"Analyse de la vidéo {nom}...")
-        barre = st.progress(0)
-        d = extraire_keypoints(path, modele, imgsz, saut, barre)
+        cle = (empreinte(path), modele_nom, imgsz, saut)
+        if cle in cache:
+            st.write(f"Vidéo {nom} : analyse déjà en mémoire ✅")
+            d = dict(cache[cle])
+        else:
+            if modele is None:
+                modele = charger_modele(modele_nom)
+            st.write(f"Analyse de la vidéo {nom}...")
+            barre = st.progress(0)
+            d = extraire_keypoints(path, modele, imgsz, saut, barre)
+            cache[cle] = dict(d)
         d["path"] = path
         st.session_state[f"datos_{role}"] = d
 

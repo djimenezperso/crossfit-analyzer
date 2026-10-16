@@ -114,7 +114,7 @@ def detectar_epaule_jete(df):
     Devuelve None en el momento que no se pueda detectar."""
     hip, ws = df["_hip_rel"].values, df["_wri_sho"].values
     n = len(df)
-    res = {"cc": None, "dip": None, "jc": None}
+    res = {"cc": None, "dip": None, "jc": None, "pico": None}
     over = np.where(ws > 0.5)[0]
     if len(over) == 0:
         return res
@@ -130,9 +130,39 @@ def detectar_epaule_jete(df):
     tras = rack[rack > res["cc"]]
     if len(tras) >= 3:
         pico = tras[np.argmax(hip[tras])]
+        res["pico"] = int(pico)  # fin de la remontée de l'épaulé : point de coupe entre épaulé et jeté
         dip = tras[tras >= pico]
         if len(dip) > 0:
             res["dip"] = int(dip[np.argmin(hip[dip])])
+    return res
+
+
+def detectar_epaule(df):
+    """Épaulé seul (sans jeté) : 'cc' = réception, 'pico' = fin de la remontée. None si introuvable."""
+    hip, ws = df["_hip_rel"].values, df["_wri_sho"].values
+    res = {"cc": None, "pico": None}
+    rack = np.where((ws > -0.45) & (ws < 0.35))[0]
+    if len(rack) == 0:
+        return res
+    res["cc"] = int(rack[np.argmin(hip[rack])])
+    tras = rack[rack > res["cc"]]
+    if len(tras) >= 3:
+        res["pico"] = int(tras[np.argmax(hip[tras])])
+    return res
+
+
+def detectar_jete(df):
+    """Jeté seul (départ barre au rack) : 'dip' et 'jc' (réception du jeté). None si introuvable."""
+    hip, ws = df["_hip_rel"].values, df["_wri_sho"].values
+    res = {"dip": None, "jc": None}
+    over = np.where(ws > 0.5)[0]
+    if len(over) == 0:
+        return res
+    j0 = int(over[0])
+    res["jc"] = int(over[np.argmin(hip[over])])
+    rack = np.where((ws > -0.45) & (ws < 0.35) & (np.arange(len(df)) < j0))[0]
+    if len(rack) > 0:
+        res["dip"] = int(rack[np.argmin(hip[rack])])
     return res
 
 

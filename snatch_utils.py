@@ -369,3 +369,37 @@ def render_comparacion(path_ref, kps_ref, df_ref, lado_ref, seg_ref,
     cap_r.release(), cap_a.release()
     if writer:
         writer.release()
+
+
+def segment_actif(df, fps, marge=0.6, trou=2.5):
+    """Détecte la zone de mouvement (saute la pause avant/après). Renvoie (début_s, fin_s) ou None."""
+    try:
+        cols = ["_hip_rel", "_wri_rel"] + list(ANGULOS)
+        X = df[cols].astype(float).interpolate(limit_direction="both").fillna(0).values
+        X = X / np.array([1.5, 1.5, 90, 90, 90, 90])
+        v = np.abs(np.diff(X, axis=0)).sum(axis=1)
+        k = max(3, int(fps * 0.4))
+        v = np.convolve(v, np.ones(k) / k, mode="same")
+        ref, base = np.percentile(v, 95), np.median(v)
+        if ref <= base * 1.5:
+            return None  # pas de pause nette : on ne coupe rien
+        actif = v > base + 0.25 * (ref - base)
+        idx = np.where(actif)[0]
+        if len(idx) < 5:
+            return None
+        # regrouper les zones actives séparées par un petit trou (ex.: pause entre l'épaulé et le jeté)
+        g = int(trou * fps)
+        groupes, deb, prec = [], idx[0], idx[0]
+        for i in idx[1:]:
+            if i - prec > g:
+                groupes.append((deb, prec))
+                deb = i
+            prec = i
+        groupes.append((deb, prec))
+        a, b = max(groupes, key=lambda x: x[1] - x[0])
+        n = len(df)
+        d = max(0, a - int(marge * fps)) / fps
+        f = min(n - 1, b + int(marge * fps)) / fps
+        return (round(d, 1), round(f, 1)) if f - d >= 1.0 else None
+    except Exception:
+        return None

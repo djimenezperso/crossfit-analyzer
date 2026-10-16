@@ -182,10 +182,72 @@ def valor_en(df, col, idx, r=2):
     return float(df[col].iloc[max(0, idx - r): idx + r + 1].mean())
 
 
+
+# ------------------------------------------------------------ idiomas (fr / es)
+NOMS_ES = {"Genou": "Rodilla", "Hanche": "Cadera", "Tronc": "Tronco", "Coude": "Codo"}
+MOMENTS_ES = {"Position de départ": "Posición inicial", "Réception": "Recepción",
+              "Réception épaulé": "Recepción de la cargada", "Dip": "Dip",
+              "Réception jeté": "Recepción del envión", "Fin": "Final"}
+
+
+def nom_angle(ang, lang="fr"):
+    return NOMS_ES.get(ang, ang) if lang == "es" else ang
+
+
+def nom_moment(mom, lang="fr"):
+    return MOMENTS_ES.get(mom, mom) if lang == "es" else mom
+
+
+PISTAS_ES = {
+    ("Genou", "Réception"): ("Sentadilla menos profunda que el modelo (rodilla más extendida).",
+                             "Rodilla más flexionada que el modelo: sentadilla más profunda o cadera más atrás."),
+    ("Hanche", "Réception"): ("Cadera más abierta: torso más erguido o cadera más alta en la recepción.",
+                              "Cadera más cerrada: torso más inclinado sobre los muslos en la recepción."),
+    ("Tronc", "Réception"): ("Torso más inclinado hacia delante que el modelo en la recepción.",
+                             "Torso más vertical que el modelo en la recepción."),
+    ("Coude", "Réception"): ("Codos más extendidos que el modelo.",
+                             "Codos menos extendidos: posible barra sin bloquear en la recepción."),
+    ("Genou", "Position de départ"): ("Salida con las piernas más extendidas (cadera más alta) que el modelo.",
+                                      "Salida con más flexión de rodilla (cadera más baja) que el modelo."),
+    ("Hanche", "Position de départ"): ("Cadera más abierta en la salida (torso más erguido).",
+                                       "Cadera más cerrada en la salida (torso más inclinado)."),
+    ("Tronc", "Position de départ"): ("Torso más inclinado hacia delante en la salida.",
+                                      "Torso más vertical en la salida."),
+    ("Genou", "Fin"): ("Rodillas más extendidas que el modelo al final del movimiento.",
+                       "Rodillas más flexionadas (menos bloqueadas) que el modelo al final del movimiento."),
+    ("Coude", "Fin"): ("Codos más extendidos que el modelo.",
+                       "Codos menos bloqueados que el modelo al final del movimiento."),
+    ("Genou", "Réception épaulé"): ("Cargada recibida más alta que el modelo (rodilla más extendida).",
+                                    "Cargada recibida más baja que el modelo (rodilla más flexionada)."),
+    ("Hanche", "Réception épaulé"): ("Cadera más abierta en la recepción de la cargada (torso más erguido).",
+                                     "Cadera más cerrada en la recepción de la cargada (torso más inclinado)."),
+    ("Tronc", "Réception épaulé"): ("Torso más inclinado hacia delante que el modelo en la recepción de la cargada.",
+                                    "Torso más vertical que el modelo en la recepción de la cargada."),
+    ("Genou", "Dip"): ("Dip menos profundo que el modelo (rodilla más extendida).",
+                       "Dip más profundo que el modelo (rodilla más flexionada)."),
+    ("Tronc", "Dip"): ("Torso más inclinado hacia delante durante el dip.",
+                       "Torso más vertical que el modelo durante el dip."),
+    ("Hanche", "Dip"): ("Cadera más abierta durante el dip.", "Cadera más cerrada durante el dip."),
+    ("Genou", "Réception jeté"): ("Rodilla más extendida que el modelo en la recepción del envión "
+                                  "(de perfil solo se ve un lado del cuerpo).",
+                                  "Rodilla más flexionada que el modelo en la recepción del envión (tijera más baja)."),
+    ("Coude", "Réception jeté"): ("Codos más extendidos que el modelo en la recepción del envión.",
+                                  "Codos menos extendidos: posible barra sin bloquear sobre la cabeza."),
+    ("Tronc", "Réception jeté"): ("Torso más inclinado hacia delante en la recepción del envión.",
+                                  "Torso más vertical que el modelo en la recepción del envión."),
+    ("Hanche", "Réception jeté"): ("Cadera más abierta que el modelo en la recepción del envión.",
+                                   "Cadera más cerrada que el modelo en la recepción del envión."),
+}
+
+
 # ---------------------------------------------------------------- feedback
-def pista(ang, momento, d):
+def pista(ang, momento, d, lang="fr"):
     """Interprétation indicative d'un écart (élève - modèle)."""
     mas = d > 0
+    if lang == "es":
+        if (ang, momento) in PISTAS_ES:
+            return PISTAS_ES[(ang, momento)][0 if mas else 1]
+        return f"Ángulo de {nom_angle(ang, 'es').lower()} {'mayor' if mas else 'menor'} que el modelo."
     t = {
         ("Genou", "Réception"): ("Squat moins profond que le modèle (genou plus tendu).",
                                  "Genou plus fléchi que le modèle : squat plus profond ou bassin plus en arrière."),
@@ -228,7 +290,7 @@ def pista(ang, momento, d):
     }
     if (ang, momento) in t:
         return t[(ang, momento)][0 if mas else 1]
-    return f"{ang} {'plus grand' if mas else 'plus petit'} que le modèle."
+    return f"Angle {'plus grand' if mas else 'plus petit'} que le modèle ({ang.lower()})."
 
 
 # ------------------------------------------------------------------ vídeo
@@ -251,7 +313,7 @@ def _dibujar(img, k, lado, rojos, grosor):
 
 def render_comparacion(path_ref, kps_ref, df_ref, lado_ref, seg_ref,
                        path_al, kps_al, df_al, lado_al, seg_al,
-                       mapa, umbral, salida, alto=480, progreso=None):
+                       mapa, umbral, salida, alto=480, progreso=None, lang="fr"):
     """Vídeo lado a lado (modelo | alumno) sincronizado, con segmentos fuera de umbral en rojo.
     seg_* = (frame_inicio, frame_fin) absolutos; mapa = frame modelo (relativo) por frame alumno (relativo)."""
     cap_r, cap_a = cv2.VideoCapture(path_ref), cv2.VideoCapture(path_al)
@@ -260,6 +322,7 @@ def render_comparacion(path_ref, kps_ref, df_ref, lado_ref, seg_ref,
     fps = cap_a.get(cv2.CAP_PROP_FPS) or 25
     writer, i_leido, frame_r = None, -1, None
     total = seg_al[1] - seg_al[0] + 1
+    L_MOD, L_ELE = ("MODELO", "ALUMNO") if lang == "es" else ("MODELE", "ELEVE")
 
     for j in range(total):
         ok_a, fa = cap_a.read()
@@ -280,17 +343,17 @@ def render_comparacion(path_ref, kps_ref, df_ref, lado_ref, seg_ref,
             d = df_al[ang].iloc[ia] - df_ref[ang].iloc[ir]
             if abs(d) > umbral:
                 rojos.append(ang)
-                txt.append(f"{ang} {d:+.0f} deg")
+                txt.append(f"{nom_angle(ang, lang)} {d:+.0f} deg")
 
         paneles = []
-        for img, k, lado, etiqueta in ((frame_r.copy(), kps_ref[ir], lado_ref, "MODELE"),
-                                       (fa.copy(), kps_al[ia], lado_al, "ELEVE")):
+        for img, k, lado, etiqueta in ((frame_r.copy(), kps_ref[ir], lado_ref, L_MOD),
+                                       (fa.copy(), kps_al[ia], lado_al, L_ELE)):
             h, w = img.shape[:2]
             _dibujar(img, k, lado, rojos, max(2, h // 220))
             img = cv2.resize(img, (int(w * alto / h), alto))
             cv2.rectangle(img, (0, 0), (190, 34), (0, 0, 0), -1)
             cv2.putText(img, etiqueta, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-            if etiqueta == "ELEVE":
+            if etiqueta == L_ELE:
                 for n, t in enumerate(txt):
                     cv2.putText(img, t, (10, alto - 15 - 28 * n), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
             paneles.append(img)

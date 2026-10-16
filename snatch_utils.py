@@ -5,7 +5,7 @@ import pandas as pd
 from scipy.signal import savgol_filter
 
 CONF = 0.3
-ANGULOS = ["Rodilla", "Cadera", "Tronco", "Codo"]
+ANGULOS = ["Genou", "Hanche", "Tronc", "Coude"]
 
 # Índices COCO de cada lado
 LADOS = {
@@ -14,10 +14,10 @@ LADOS = {
 }
 # Segmentos del cuerpo implicados en cada ángulo (para pintarlos en rojo)
 SEGMENTOS = {
-    "Rodilla": [("hip", "kne"), ("kne", "ank")],
-    "Cadera": [("sho", "hip"), ("hip", "kne")],
-    "Tronco": [("sho", "hip")],
-    "Codo": [("sho", "elb"), ("elb", "wri")],
+    "Genou": [("hip", "kne"), ("kne", "ank")],
+    "Hanche": [("sho", "hip"), ("hip", "kne")],
+    "Tronc": [("sho", "hip")],
+    "Coude": [("sho", "elb"), ("elb", "wri")],
 }
 LIMBS = [(5, 7), (7, 9), (6, 8), (8, 10), (5, 6), (11, 12), (5, 11), (6, 12),
          (11, 13), (13, 15), (12, 14), (14, 16)]
@@ -88,10 +88,10 @@ def calcular_metricas(kps, lado):
     torso = np.where(torso < 10, np.nan, torso)
 
     m = {
-        "Rodilla": angulo(hip, kne, ank),
-        "Cadera": angulo(sho, hip, kne),
-        "Codo": angulo(sho, elb, wri),
-        "Tronco": np.degrees(np.arctan2(np.abs(v[:, 0]), -v[:, 1])),  # 0° = vertical
+        "Genou": angulo(hip, kne, ank),
+        "Hanche": angulo(sho, hip, kne),
+        "Coude": angulo(sho, elb, wri),
+        "Tronc": np.degrees(np.arctan2(np.abs(v[:, 0]), -v[:, 1])),  # 0° = vertical
         "_hip_rel": (ank[:, 1] - hip[:, 1]) / torso,   # altura de cadera sobre tobillo, en torsos
         "_wri_rel": (ank[:, 1] - wri[:, 1]) / torso,   # altura de muñeca (≈ barra), en torsos
     }
@@ -110,8 +110,8 @@ def detectar_recepcion(df):
 
 # --------------------------------------------------------------------- DTW
 def _features(df):
-    return np.column_stack([df["Rodilla"] / 90, df["Cadera"] / 90, df["Tronco"] / 90,
-                            df["Codo"] / 90, df["_hip_rel"] / 1.5, df["_wri_rel"] / 1.5])
+    return np.column_stack([df["Genou"] / 90, df["Hanche"] / 90, df["Tronc"] / 90,
+                            df["Coude"] / 90, df["_hip_rel"] / 1.5, df["_wri_rel"] / 1.5])
 
 
 def alinear_dtw(df_ref, df_al):
@@ -153,31 +153,31 @@ def valor_en(df, col, idx, r=2):
 
 # ---------------------------------------------------------------- feedback
 def pista(ang, momento, d):
-    """Interpretación orientativa de una diferencia (alumno - modelo)."""
+    """Interprétation indicative d'un écart (élève - modèle)."""
     mas = d > 0
     t = {
-        ("Rodilla", "Recepción"): ("Sentadilla menos profunda que el modelo (rodilla más extendida).",
-                                  "Rodilla más flexionada que el modelo: sentadilla más profunda o cadera más atrás."),
-        ("Cadera", "Recepción"): ("Cadera más abierta: torso más erguido o cadera más alta en la recepción.",
-                                 "Cadera más cerrada: torso más inclinado sobre los muslos en la recepción."),
-        ("Tronco", "Recepción"): ("Torso más inclinado hacia delante que el modelo en la recepción.",
-                                 "Torso más vertical que el modelo en la recepción."),
-        ("Codo", "Recepción"): ("Codos más extendidos que el modelo.",
-                               "Codos menos extendidos: posible barra no bloqueada en la recepción."),
-        ("Rodilla", "Posición inicial"): ("Salida con piernas más extendidas (cadera más alta) que el modelo.",
-                                         "Salida con más flexión de rodilla (cadera más baja) que el modelo."),
-        ("Cadera", "Posición inicial"): ("Cadera más abierta en la salida (torso más erguido).",
-                                        "Cadera más cerrada en la salida (torso más inclinado)."),
-        ("Tronco", "Posición inicial"): ("Torso más inclinado hacia delante en la salida.",
-                                        "Torso más vertical en la salida."),
-        ("Rodilla", "Final"): ("Rodillas menos bloqueadas que el modelo al terminar de pie.",
-                              "Rodilla más flexionada que el modelo al terminar."),
-        ("Codo", "Final"): ("Codos más extendidos que el modelo.",
-                           "Codos menos bloqueados que el modelo al terminar."),
+        ("Genou", "Réception"): ("Squat moins profond que le modèle (genou plus tendu).",
+                                 "Genou plus fléchi que le modèle : squat plus profond ou bassin plus en arrière."),
+        ("Hanche", "Réception"): ("Hanche plus ouverte : buste plus droit ou bassin plus haut à la réception.",
+                                  "Hanche plus fermée : buste plus penché sur les cuisses à la réception."),
+        ("Tronc", "Réception"): ("Buste plus penché vers l'avant que le modèle à la réception.",
+                                 "Buste plus vertical que le modèle à la réception."),
+        ("Coude", "Réception"): ("Coudes plus tendus que le modèle.",
+                                 "Coudes moins tendus : barre peut-être non verrouillée à la réception."),
+        ("Genou", "Position de départ"): ("Départ avec les jambes plus tendues (bassin plus haut) que le modèle.",
+                                          "Départ avec plus de flexion des genoux (bassin plus bas) que le modèle."),
+        ("Hanche", "Position de départ"): ("Hanche plus ouverte au départ (buste plus droit).",
+                                           "Hanche plus fermée au départ (buste plus penché)."),
+        ("Tronc", "Position de départ"): ("Buste plus penché vers l'avant au départ.",
+                                          "Buste plus vertical au départ."),
+        ("Genou", "Fin"): ("Genoux plus tendus que le modèle en fin de mouvement.",
+                           "Genoux plus fléchis (moins verrouillés) que le modèle en fin de mouvement."),
+        ("Coude", "Fin"): ("Coudes plus tendus que le modèle.",
+                           "Coudes moins verrouillés que le modèle en fin de mouvement."),
     }
     if (ang, momento) in t:
         return t[(ang, momento)][0 if mas else 1]
-    return f"{ang} {'mayor' if mas else 'menor'} que el modelo."
+    return f"{ang} {'plus grand' if mas else 'plus petit'} que le modèle."
 
 
 # ------------------------------------------------------------------ vídeo
@@ -232,14 +232,14 @@ def render_comparacion(path_ref, kps_ref, df_ref, lado_ref, seg_ref,
                 txt.append(f"{ang} {d:+.0f} deg")
 
         paneles = []
-        for img, k, lado, etiqueta in ((frame_r.copy(), kps_ref[ir], lado_ref, "MODELO"),
-                                       (fa.copy(), kps_al[ia], lado_al, "ALUMNO")):
+        for img, k, lado, etiqueta in ((frame_r.copy(), kps_ref[ir], lado_ref, "MODELE"),
+                                       (fa.copy(), kps_al[ia], lado_al, "ELEVE")):
             h, w = img.shape[:2]
             _dibujar(img, k, lado, rojos, max(2, h // 220))
             img = cv2.resize(img, (int(w * alto / h), alto))
             cv2.rectangle(img, (0, 0), (190, 34), (0, 0, 0), -1)
             cv2.putText(img, etiqueta, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-            if etiqueta == "ALUMNO":
+            if etiqueta == "ELEVE":
                 for n, t in enumerate(txt):
                     cv2.putText(img, t, (10, alto - 15 - 28 * n), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
             paneles.append(img)

@@ -11,11 +11,15 @@ from ultralytics import YOLO
 
 import snatch_utils as su
 
-REF_PATH = "referencia_snatch.mp4"  # vidéo modèle optionnelle, à mettre à la racine du dépôt
+REF_SNATCH = "referencia_snatch.mp4"  # vidéos modèle optionnelles, à mettre à la racine du dépôt
+REF_CJ = "referencia_cj.mp4"
 
-st.set_page_config(page_title="Comparateur de Snatch", page_icon="🏋️", layout="wide")
-st.title("🏋️ Comparateur de Squat Snatch")
+st.set_page_config(page_title="Comparateur Snatch & Épaulé-jeté", page_icon="🏋️", layout="wide")
+st.title("🏋️ Comparateur de technique haltérophile")
 st.write("Compare la technique d'un élève avec une vidéo modèle : angles articulaires, phases et vidéo synchronisée.")
+
+exercice = st.radio("Exercice", ["Squat Snatch", "Épaulé-jeté (Clean & Jerk)"], horizontal=True)
+cj = exercice.startswith("Épaulé")
 
 with st.sidebar:
     st.header("Réglages")
@@ -103,6 +107,7 @@ def vers_h264(path):
 col1, col2 = st.columns(2)
 with col1:
     st.subheader("Vidéo modèle")
+    REF_PATH = REF_CJ if cj else REF_SNATCH
     if os.path.exists(REF_PATH):
         path_ref = REF_PATH
         st.success(f"Utilisation de `{REF_PATH}` du dépôt")
@@ -175,16 +180,44 @@ sr, sa = df_r.iloc[r0:r1 + 1].reset_index(drop=True), df_a.iloc[a0:a1 + 1].reset
 
 # ---------------------------------------------------------------- alignement
 with st.spinner("Alignement des mouvements (DTW)..."):
-    path = su.alinear_dtw(sr, sa)
+    path = su.alinear_dtw(sr, sa, cj)
     mapa = su.mapa_alumno_a_ref(path, len(sa))
-cr, ca = su.detectar_recepcion(sr), su.detectar_recepcion(sa)
-
 st.subheader("2️⃣ Résultats")
-m1, m2, m3 = st.columns(3)
-m1.metric("Réception du modèle", f"{cr / len(sr):.0%} du mouvement")
-m2.metric("Réception de l'élève", f"{ca / len(sa):.0%} du mouvement")
-m3.metric("Écart de timing", f"{(ca / len(sa) - cr / len(sr)) * 100:+.0f} pts")
-st.caption("Le temps est comparé en proportion (pas en secondes) car le modèle peut être au ralenti.")
+if cj:
+    ev_r, ev_a = su.detectar_epaule_jete(sr), su.detectar_epaule_jete(sa)
+    pts = [("cc", "Réception épaulé"), ("dip", "Dip"), ("jc", "Réception jeté")]
+    cols = st.columns(3)
+    moments = {"Position de départ": (0, 0)}
+    for col, (k, nom) in zip(cols, pts):
+        if ev_r[k] is not None and ev_a[k] is not None:
+            pr, pa = ev_r[k] / len(sr), ev_a[k] / len(sa)
+            col.metric(nom, f"{pa:.0%} (modèle {pr:.0%})", f"{(pa - pr) * 100:+.0f} pts", delta_color="off")
+            moments[nom] = (ev_r[k], ev_a[k])
+        else:
+            col.metric(nom, "non détecté")
+    moments["Fin"] = (len(sr) - 1, len(sa) - 1)
+    if ev_r["cc"] is None or ev_a["cc"] is None or ev_r["jc"] is None or ev_a["jc"] is None:
+        st.warning("⚠️ L'épaulé ou le jeté n'a pas été repéré dans l'une des vidéos (barre jamais au-dessus de la tête, "
+                   "ou épaulé non détecté). Vérifie le découpage : la comparaison par moments clés sera partielle.")
+    st.caption("Position de chaque moment dans le mouvement, élève vs modèle (en %). Vu de profil, un seul côté du "
+               "corps est visible : pour le jeté en fente, l'angle du genou dépend de la jambe visible (avant ou arrière).")
+    coupes = [v for v in (ev_r["cc"], ev_r["jc"]) if v is not None]
+    if len(coupes) == 2:
+        phases = {"Tirage et épaulé": [(i, j) for i, j in path if i <= coupes[0]],
+                  "Dip et jeté": [(i, j) for i, j in path if coupes[0] < i <= coupes[1]],
+                  "Remontée finale": [(i, j) for i, j in path if i > coupes[1]]}
+    else:
+        phases = {"Mouvement complet": list(path)}
+else:
+    cr, ca = su.detectar_recepcion(sr), su.detectar_recepcion(sa)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Réception du modèle", f"{cr / len(sr):.0%} du mouvement")
+    m2.metric("Réception de l'élève", f"{ca / len(sa):.0%} du mouvement")
+    m3.metric("Écart de timing", f"{(ca / len(sa) - cr / len(sr)) * 100:+.0f} pts")
+    st.caption("Le temps est comparé en proportion (pas en secondes) car le modèle peut être au ralenti.")
+    moments = {"Position de départ": (0, 0), "Réception": (cr, ca), "Fin": (len(sr) - 1, len(sa) - 1)}
+    phases = {"Montée et réception": [(i, j) for i, j in path if i <= cr],
+              "Remontée": [(i, j) for i, j in path if i > cr]}
 
 # ---- courbes alignées
 dfp = pd.DataFrame(path, columns=["i", "j"]).groupby("i")["j"].mean()
@@ -198,7 +231,6 @@ for n, ang in enumerate(su.ANGULOS):
                       height=200)
 
 # ---- tableau des moments clés
-moments = {"Position de départ": (0, 0), "Réception": (cr, ca), "Fin": (len(sr) - 1, len(sa) - 1)}
 lignes, indices = [], []
 for mom, (i, j) in moments.items():
     for ang in su.ANGULOS:
@@ -214,8 +246,6 @@ st.dataframe(pd.DataFrame(lignes), use_container_width=True, hide_index=True)
 
 # ---- par phases (chemin DTW)
 st.markdown("#### Écart moyen par phase")
-phases = {"Montée et réception": [(i, j) for i, j in path if i <= cr],
-          "Remontée": [(i, j) for i, j in path if i > cr]}
 lignes_p = []
 for phase, paires in phases.items():
     if not paires:

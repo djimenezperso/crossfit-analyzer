@@ -1,13 +1,18 @@
+import base64
 import hashlib
 import os
+import pickle
 import shutil
 import subprocess
 import tempfile
+import time
+import uuid
 
 import cv2
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from ultralytics import YOLO
 
 import snatch_utils as su
@@ -18,6 +23,36 @@ REF_CJ = "referencia_cj.mp4"
 st.set_page_config(page_title="Comparateur Snatch & Épaulé-jeté", page_icon="🏋️", layout="wide")
 st.title("🏋️ Comparateur de technique haltérophile")
 st.write("Compare la technique d'un élève avec une vidéo modèle : angles articulaires, phases et vidéo synchronisée.")
+
+# ------------------------------------------------- stockage temporaire (reprise de session)
+BASE = os.path.join(tempfile.gettempdir(), "comparateur_snatch")
+SESS_ROOT, CACHE_DIR = os.path.join(BASE, "sessions"), os.path.join(BASE, "poses")
+os.makedirs(SESS_ROOT, exist_ok=True)
+os.makedirs(CACHE_DIR, exist_ok=True)
+DUREE_H = 24  # les vidéos et analyses sont supprimées du serveur après 24 h
+
+
+def nettoyer():
+    limite = time.time() - DUREE_H * 3600
+    for racine in (SESS_ROOT, CACHE_DIR):
+        for nom in os.listdir(racine):
+            p = os.path.join(racine, nom)
+            try:
+                if os.path.getmtime(p) < limite:
+                    shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
+            except OSError:
+                pass
+
+
+nettoyer()
+sid = "".join(c for c in str(st.query_params.get("s", "")) if c.isalnum())[:16]
+if not sid:
+    sid = uuid.uuid4().hex[:10]
+    st.query_params["s"] = sid  # le lien garde l'identifiant : en le rouvrant, on retrouve ses vidéos
+SESS = os.path.join(SESS_ROOT, sid)
+os.makedirs(SESS, exist_ok=True)
+
+
 
 exercice = st.radio("Exercice", ["Squat Snatch", "Épaulé-jeté (Clean & Jerk)"], horizontal=True)
 cj = exercice.startswith("Épaulé")
@@ -32,6 +67,15 @@ with st.sidebar:
     modele_nom, imgsz, saut = PRESETS[preset]
     seuil = st.slider("Seuil d'écart (degrés)", 5, 30, 15)
     st.caption("Une vidéo déjà analysée avec le même réglage est réutilisée instantanément.")
+    st.caption(f"🔒 Tes vidéos sont conservées {DUREE_H} h sur le serveur pour reprendre ta session "
+               "(garde le même lien), puis supprimées.")
+    if st.button("🗑️ Effacer toutes mes vidéos"):
+        shutil.rmtree(SESS, ignore_errors=True)
+        os.makedirs(SESS, exist_ok=True)
+        for k in list(st.session_state.keys()):
+            if k.startswith("datos_") or k == "video_cmp":
+                del st.session_state[k]
+        st.rerun()
 
 st.info("📹 **Comment filmer :** vue **de profil** (90° par rapport au plan du mouvement), caméra fixe à hauteur "
         "de hanche, à 3-4 m, corps entier visible et du même côté que la vidéo modèle.")
@@ -43,14 +87,88 @@ def charger_modele(nom):
     return YOLO(nom)
 
 
-def sauver_upload(f):
-    cle = f"upload_{f.name}_{f.size}"
-    if cle not in st.session_state:
-        t = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        t.write(f.getvalue())
-        t.close()
-        st.session_state[cle] = t.name
-    return st.session_state[cle]
+_compresseur = components.declare_component(
+    "compresseur_video", path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "compresseur"))
+
+
+def normaliser(src, dest):
+    """Remet la vidéo compressée par le navigateur en MP4 H.264 à 30 images/s constantes."""
+    if shutil.which("ffmpeg") is not None:
+        r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-r", "30",
+                            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264",
+                            "-pix_fmt", "yuv420p", "-an", dest])
+        if r.returncode == 0 and os.path.exists(dest):
+            return True
+    shutil.copy(src, dest)
+    return False
+
+
+def recevoir_compresse(titre, role, cle_widget):
+    """Vidéo compressée dans le navigateur du téléphone, puis reçue ici (bêta)."""
+    val = _compresseur(label=titre, max_side=720, bitrate=2500000, key=f"comp_{cle_widget}", default=None)
+    if not val or not val.get("data"):
+        return None
+    dest = os.path.join(SESS, f"{role}.mp4")
+    meta = dest + ".meta"
+    marque = f"{val['name']}|compresse{val['size']}"
+    if not (os.path.exists(dest) and os.path.exists(meta) and open(meta, encoding="utf-8").read() == marque):
+        brut = dest + ".brut"
+        with open(brut, "wb") as out:
+            out.write(base64.b64decode(val["data"]))
+        normaliser(brut, dest)
+        os.remove(brut)
+        with open(meta, "w", encoding="utf-8") as m:
+            m.write(marque)
+    return dest
+
+
+def sauver_upload(f, role):
+    dest = os.path.join(SESS, f"{role}.mp4")
+    meta = dest + ".meta"
+    marque = f"{f.name}|{f.size}"
+    deja = os.path.exists(dest) and os.path.exists(meta) and open(meta, encoding="utf-8").read() == marque
+    if not deja:
+        with open(dest, "wb") as out:
+            out.write(f.getbuffer())
+        with open(meta, "w", encoding="utf-8") as m:
+            m.write(marque)
+    return dest
+
+
+def supprimer_video(role):
+    for suf in ("", ".meta"):
+        p = os.path.join(SESS, f"{role}.mp4{suf}")
+        if os.path.exists(p):
+            os.remove(p)
+
+
+def zone_upload(titre, role, cle_widget):
+    """Téléversement + reprise : une vidéo déjà envoyée est retrouvée si on revient avec le même lien."""
+    auto = st.toggle("📲 Compresser sur le téléphone avant l'envoi (bêta)", key=f"auto_{cle_widget}",
+                     help="Réduit la vidéo dans le navigateur avant de l'envoyer : envoi bien plus rapide. "
+                          "Si ça ne marche pas, désactive l'option.")
+    path = None
+    if auto:
+        path = recevoir_compresse(titre, role, cle_widget)
+    else:
+        f = st.file_uploader(titre, type=["mp4", "mov", "avi"], key=cle_widget)
+        if f:
+            path = sauver_upload(f, role)
+    if path is None:
+        path = os.path.join(SESS, f"{role}.mp4")
+        if not os.path.exists(path):
+            return None
+        meta = path + ".meta"
+        nom = open(meta, encoding="utf-8").read().split("|")[0] if os.path.exists(meta) else "vidéo"
+        st.success(f"✅ Vidéo retrouvée : {nom}")
+        if st.button("🗑️ Supprimer cette vidéo", key=f"del_{role}"):
+            supprimer_video(role)
+            st.rerun()
+    mo = os.path.getsize(path) / 1e6
+    if mo > 80:
+        st.warning(f"Vidéo lourde ({mo:.0f} Mo) : le téléversement est long. Coupe-la à la seule tentative "
+                   "(10-15 s) et filme en 1080p à 30 images/s.")
+    return path
 
 
 def extraire_keypoints(path, modele, imgsz, saut, barre):
@@ -87,9 +205,24 @@ def extraire_keypoints(path, modele, imgsz, saut, barre):
     return dict(kps=kps, fps=fps, size=(w, h))
 
 
-@st.cache_resource
-def cache_poses():
-    return {}
+def chemin_cache(cle):
+    return os.path.join(CACHE_DIR, hashlib.md5(repr(cle).encode()).hexdigest() + ".pkl")
+
+
+def charger_poses(cle):
+    p = chemin_cache(cle)
+    if os.path.exists(p):
+        try:
+            with open(p, "rb") as fh:
+                return pickle.load(fh)
+        except Exception:
+            return None
+    return None
+
+
+def sauver_poses(cle, d):
+    with open(chemin_cache(cle), "wb") as fh:
+        pickle.dump({k: v for k, v in d.items() if k not in ("path", "cle")}, fh)
 
 
 def empreinte(path):
@@ -105,7 +238,7 @@ def empreinte(path):
 
 
 @st.cache_data(show_spinner=False)
-def lire_image(path, idx):
+def lire_image(path, idx, cle):
     cap = cv2.VideoCapture(path)
     cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
     ok, f = cap.read()
@@ -135,36 +268,53 @@ with col1:
         path_ref = REF_PATH
         st.success(f"Utilisation de `{REF_PATH}` du dépôt")
     else:
-        f = st.file_uploader("Téléverse la vidéo modèle", type=["mp4", "mov", "avi"], key=f"ref_{int(cj)}")
-        path_ref = sauver_upload(f) if f else None
+        path_ref = zone_upload("Téléverse la vidéo modèle", "ref_cj" if cj else "ref_sn", f"ref_{int(cj)}")
 with col2:
     st.subheader("Vidéo de l'élève")
-    f = st.file_uploader("Téléverse la vidéo de l'élève", type=["mp4", "mov", "avi"], key="al")
-    path_al = sauver_upload(f) if f else None
+    path_al = zone_upload("Téléverse la vidéo de l'élève", "al", "al")
 
 if not (path_ref and path_al):
     st.stop()
 
+CL = {role: (empreinte(path), modele_nom, imgsz, saut) for role, path in (("ref", path_ref), ("al", path_al))}
+
+
+def reprendre_depuis_cache():
+    """Recharge les poses déjà calculées (même vidéo, mêmes réglages), sans les recalculer."""
+    for role, path in (("ref", path_ref), ("al", path_al)):
+        d = st.session_state.get(f"datos_{role}")
+        if d and d.get("cle") == CL[role]:
+            continue
+        c = charger_poses(CL[role])
+        if c is None:
+            return False
+        c["path"], c["cle"] = path, CL[role]
+        st.session_state[f"datos_{role}"] = c
+    return True
+
+
+reprendre_depuis_cache()
+
 if st.button("🚀 Analyser les vidéos (extraire les poses)", type="primary"):
-    cache = cache_poses()
     modele = None
     for role, path, nom in (("ref", path_ref, "modèle"), ("al", path_al, "élève")):
-        cle = (empreinte(path), modele_nom, imgsz, saut)
-        if cle in cache:
+        cle = CL[role]
+        d = charger_poses(cle)
+        if d is not None:
             st.write(f"Vidéo {nom} : analyse déjà en mémoire ✅")
-            d = dict(cache[cle])
         else:
             if modele is None:
                 modele = charger_modele(modele_nom)
             st.write(f"Analyse de la vidéo {nom}...")
             barre = st.progress(0)
             d = extraire_keypoints(path, modele, imgsz, saut, barre)
-            cache[cle] = dict(d)
-        d["path"] = path
+            sauver_poses(cle, d)
+        d["path"], d["cle"] = path, cle
         st.session_state[f"datos_{role}"] = d
 
 R, A = st.session_state.get("datos_ref"), st.session_state.get("datos_al")
-if not (R and A and R["path"] == path_ref and A["path"] == path_al):
+if not (R and A and R["path"] == path_ref and A["path"] == path_al
+        and R.get("cle") == CL["ref"] and A.get("cle") == CL["al"]):
     st.warning("Clique sur **Analyser les vidéos** pour extraire les poses.")
     st.stop()
 
@@ -197,8 +347,8 @@ for col, role, d, nom in ((c1, "ref", R, "Modèle"), (c2, "al", A, "Élève")):
         i0, i1 = int(t0 * fps), min(n - 1, int(t1 * fps))
         segs[role] = (i0, i1)
         a, b = st.columns(2)
-        a.image(lire_image(d["path"], i0), caption="début", use_container_width=True)
-        b.image(lire_image(d["path"], i1), caption="fin", use_container_width=True)
+        a.image(lire_image(d["path"], i0, empreinte(d["path"])), caption="début", use_container_width=True)
+        b.image(lire_image(d["path"], i1, empreinte(d["path"])), caption="fin", use_container_width=True)
 
 (r0, r1), (a0, a1) = segs["ref"], segs["al"]
 if r1 - r0 < 15 or a1 - a0 < 15:

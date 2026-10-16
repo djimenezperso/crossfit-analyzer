@@ -233,18 +233,25 @@ def recevoir_compresse(titre, role, cle_widget):
     """Vidéo compressée dans le navigateur du téléphone, puis reçue ici (bêta)."""
     val = _compresseur(label=titre, max_side=720, bitrate=2500000, lang=LANG, key=f"comp_{cle_widget}", default=None)
     if not val or not val.get("data"):
+        st.caption("⏳ En attente de la vidéo compressée…")
         return None
     dest = os.path.join(SESS, f"{role}.mp4")
     meta = dest + ".meta"
     marque = f"{val['name']}|compresse{val['size']}"
-    if not (os.path.exists(dest) and os.path.exists(meta) and open(meta, encoding="utf-8").read() == marque):
-        brut = dest + ".brut"
-        with open(brut, "wb") as out:
-            out.write(base64.b64decode(val["data"]))
-        normaliser(brut, dest)
-        os.remove(brut)
-        with open(meta, "w", encoding="utf-8") as m:
-            m.write(marque)
+    try:
+        if not (os.path.exists(dest) and os.path.exists(meta) and open(meta, encoding="utf-8").read() == marque):
+            with st.spinner("Traitement de la vidéo reçue…"):
+                brut = dest + ".brut"
+                with open(brut, "wb") as out:
+                    out.write(base64.b64decode(val["data"]))
+                normaliser(brut, dest)
+                os.remove(brut)
+                with open(meta, "w", encoding="utf-8") as m:
+                    m.write(marque)
+    except Exception as e:
+        st.error(f"Erreur de traitement : {e}")
+        return None
+    st.success(f"✅ Vidéo reçue ({val['size'] / 1e6:.1f} Mo)")
     return dest
 
 

@@ -209,7 +209,8 @@ def charger_modele(nom):
 
 _DOSSIER_COMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compresseur")
 try:
-    if os.path.isfile(os.path.join(_DOSSIER_COMP, "index.html")):
+    COMPRESSION_ACTIVE = False  # mettre True pour réactiver la compression dans le navigateur (bêta)
+    if COMPRESSION_ACTIVE and os.path.isfile(os.path.join(_DOSSIER_COMP, "index.html")):
         _compresseur = components.declare_component("compresseur_video", path=_DOSSIER_COMP)
     else:
         _compresseur = None  # dossier absent : l'option de compression est simplement masquée

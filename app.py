@@ -87,8 +87,14 @@ def charger_modele(nom):
     return YOLO(nom)
 
 
-_compresseur = components.declare_component(
-    "compresseur_video", path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "compresseur"))
+_DOSSIER_COMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compresseur")
+try:
+    if os.path.isfile(os.path.join(_DOSSIER_COMP, "index.html")):
+        _compresseur = components.declare_component("compresseur_video", path=_DOSSIER_COMP)
+    else:
+        _compresseur = None  # dossier absent : l'option de compression est simplement masquée
+except Exception:
+    _compresseur = None
 
 
 def normaliser(src, dest):
@@ -144,9 +150,11 @@ def supprimer_video(role):
 
 def zone_upload(titre, role, cle_widget):
     """Téléversement + reprise : une vidéo déjà envoyée est retrouvée si on revient avec le même lien."""
-    auto = st.toggle("📲 Compresser sur le téléphone avant l'envoi (bêta)", key=f"auto_{cle_widget}",
-                     help="Réduit la vidéo dans le navigateur avant de l'envoyer : envoi bien plus rapide. "
-                          "Si ça ne marche pas, désactive l'option.")
+    auto = False
+    if _compresseur is not None:
+        auto = st.toggle("📲 Compresser sur le téléphone avant l'envoi (bêta)", key=f"auto_{cle_widget}",
+                         help="Réduit la vidéo dans le navigateur avant de l'envoyer : envoi bien plus rapide. "
+                              "Si ça ne marche pas, désactive l'option.")
     path = None
     if auto:
         path = recevoir_compresse(titre, role, cle_widget)

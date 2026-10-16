@@ -108,11 +108,14 @@ col1, col2 = st.columns(2)
 with col1:
     st.subheader("Vidéo modèle")
     REF_PATH = REF_CJ if cj else REF_SNATCH
-    if os.path.exists(REF_PATH):
+    existe = os.path.exists(REF_PATH)
+    perso = st.checkbox("Utiliser ma propre vidéo modèle", value=not existe, disabled=not existe,
+                        help="Décoche pour utiliser la vidéo modèle intégrée à l'application.")
+    if existe and not perso:
         path_ref = REF_PATH
         st.success(f"Utilisation de `{REF_PATH}` du dépôt")
     else:
-        f = st.file_uploader("Téléverse la vidéo modèle", type=["mp4", "mov", "avi"], key="ref")
+        f = st.file_uploader("Téléverse la vidéo modèle", type=["mp4", "mov", "avi"], key=f"ref_{int(cj)}")
         path_ref = sauver_upload(f) if f else None
 with col2:
     st.subheader("Vidéo de l'élève")

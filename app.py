@@ -50,6 +50,7 @@ TR = {
   "cut_title": "1️⃣ Découpe la tentative",
   "cut_text": "Garde seulement le moment entre le départ et la fin du mouvement, debout avec la barre en haut (enlève les célébrations, la barre lâchée, etc.).",
   "n_ref": "Modèle", "n_al": "Élève", "debut": "début", "fin": "fin",
+  "auto_cut": "✂️ Pause détectée et ignorée : mouvement entre {a} s et {b} s (ajuste si besoin).",
   "too_short": "Le segment est trop court.",
   "too_long": "Segment trop long pour l'alignement (max. ~1200 images). Raccourcis-le.",
   "dtw": "Alignement des mouvements (DTW)...", "res_title": "2️⃣ Résultats",
@@ -102,6 +103,7 @@ TR = {
   "cut_title": "1️⃣ Recorta el intento",
   "cut_text": "Deja solo el momento entre la salida y el final del movimiento, de pie con la barra arriba (quita celebraciones, la barra soltada, etc.).",
   "n_ref": "Modelo", "n_al": "Alumno", "debut": "inicio", "fin": "fin",
+  "auto_cut": "✂️ Pausa detectada y omitida: movimiento entre {a} s y {b} s (ajusta si hace falta).",
   "too_short": "El segmento es demasiado corto.",
   "too_long": "Segmento demasiado largo para alinear (máx. ~1200 fotogramas). Recórtalo más.",
   "dtw": "Alineando los movimientos (DTW)...", "res_title": "2️⃣ Resultados",
@@ -472,8 +474,12 @@ segs = {}
 for col, role, d, nom in ((c1, "ref", R, t("n_ref")), (c2, "al", A, t("n_al"))):
     with col:
         n, fps = len(d["kps"]), d["fps"]
-        dur = n / fps
-        t0, t1 = st.slider(f"{nom} (s)", 0.0, float(round(dur, 1)), (0.0, float(round(dur, 1))), 0.1, key=f"s_{role}")
+        dur = float(round(n / fps, 1))
+        seg_auto = su.segment_actif(df_r if role == "ref" else df_a, fps)
+        defaut = (min(float(seg_auto[0]), dur), min(float(seg_auto[1]), dur)) if seg_auto else (0.0, dur)
+        t0, t1 = st.slider(f"{nom} (s)", 0.0, dur, defaut, 0.1, key=f"s_{role}_{empreinte(d['path'])}")
+        if seg_auto:
+            st.caption(t("auto_cut", a=seg_auto[0], b=seg_auto[1]))
         i0, i1 = int(t0 * fps), min(n - 1, int(t1 * fps))
         segs[role] = (i0, i1)
         a, b = st.columns(2)

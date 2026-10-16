@@ -17,7 +17,7 @@
 <script>
 const S = (type, extra) => window.parent.postMessage(Object.assign({isStreamlitMessage: true, type}, extra || {}), "*");
 const $ = id => document.getElementById(id);
-let MAXSIDE = 720, BITRATE = 2500000, LG = "fr";
+let MAXSIDE = 720, BITRATE = 2500000, LG = "fr", RATE = 2;
 const M = {
   fr: {pick: "Choisir une vidéo",
        busy: mo => `Compression en cours (${mo} Mo)… garde cet écran ouvert.`,
@@ -68,7 +68,7 @@ async function compresser(file) {
   const types = ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
   const mime = types.find(t => MediaRecorder.isTypeSupported(t));
   if (!mime) throw new Error(L("e_fmt"));
-  const rec = new MediaRecorder(c.captureStream(30), {mimeType: mime, videoBitsPerSecond: BITRATE});
+  const rec = new MediaRecorder(c.captureStream(30 * RATE), {mimeType: mime, videoBitsPerSecond: BITRATE});
   const morceaux = [];
   rec.ondataavailable = e => { if (e.data && e.data.size) morceaux.push(e.data); };
   const fini = new Promise(ok => { rec.onstop = ok; });
@@ -81,7 +81,9 @@ async function compresser(file) {
   };
   v.onended = () => { actif = false; setTimeout(() => rec.stop(), 300); };
   rec.start(500);
+  v.playbackRate = RATE;
   await v.play();
+  v.playbackRate = RATE;
   dessiner();
   await fini;
   v.remove(); URL.revokeObjectURL(url);
@@ -103,7 +105,7 @@ $("f").addEventListener("change", async ev => {
       fr.onerror = () => ko(new Error(L("e_res")));
       fr.readAsDataURL(r.blob);
     });
-    S("streamlit:setComponentValue", {value: {name: file.name, size: r.blob.size, mime: r.mime, w: r.w, h: r.h, data: b64}, dataType: "json"});
+    S("streamlit:setComponentValue", {value: {name: file.name, size: r.blob.size, mime: r.mime, w: r.w, h: r.h, rate: RATE, data: b64}, dataType: "json"});
     msg(L("sent")((r.blob.size / 1e6).toFixed(1)));
   } catch (e) {
     msg(L("fail")(e.message), true);

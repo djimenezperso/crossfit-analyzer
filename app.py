@@ -217,11 +217,12 @@ except Exception:
     _compresseur = None
 
 
-def normaliser(src, dest):
-    """Remet la vidéo compressée par le navigateur en MP4 H.264 à 30 images/s constantes."""
+def normaliser(src, dest, rate=1):
+    """Remet la vidéo compressée par le navigateur en MP4 H.264 à 30 images/s constantes
+    (rate = vitesse de lecture utilisée pendant la compression, rétablie ici)."""
     if shutil.which("ffmpeg") is not None:
         r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-r", "30",
-                            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264",
+                            "-vf", f"setpts={float(rate)}*PTS,scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264",
                             "-pix_fmt", "yuv420p", "-an", dest])
         if r.returncode == 0 and os.path.exists(dest):
             return True
@@ -244,7 +245,7 @@ def recevoir_compresse(titre, role, cle_widget):
                 brut = dest + ".brut"
                 with open(brut, "wb") as out:
                     out.write(base64.b64decode(val["data"]))
-                normaliser(brut, dest)
+                normaliser(brut, dest, val.get("rate") or 1)
                 os.remove(brut)
                 with open(meta, "w", encoding="utf-8") as m:
                     m.write(marque)
